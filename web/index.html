@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#112d3b">
+  <meta name="description" content="Local WorkOS，本地优先的个人研究与项目工作平台。">
+  <title>Local WorkOS · 工作总览</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="app-shell">
+    <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+    <aside class="sidebar" id="sidebar" aria-label="主导航">
+      <a class="brand" href="#overview" data-page="overview" aria-label="Local WorkOS 工作总览">
+        <img src="/icon.svg" alt="" width="38" height="38">
+        <span>Local <span class="brand-workos">WorkOS <span class="brand-dot"></span></span></span>
+      </a>
+      <button class="workspace-switch" id="workspace-switch" type="button" aria-label="切换个人与演示工作区"></button>
+      <div class="nav-label">工作空间 <span>WORKSPACE</span></div>
+      <nav id="primary-nav"></nav>
+      <div class="sidebar-bottom">
+        <div class="local-note"><span class="status-dot"></span><div>本地优先<span>你的材料，留在你的电脑</span></div></div>
+        <button class="nav-item settings-nav" data-page="settings" type="button" id="settings-nav"></button>
+        <div class="sidebar-footer"><span>为专注而设计</span><span id="version-label">v1.0</span></div>
+      </div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="breadcrumb-wrap"><button type="button" class="icon-button mobile-menu" id="mobile-menu" aria-label="打开导航" aria-expanded="false"></button><div class="breadcrumb" id="breadcrumb"></div></div>
+        <div class="topbar-actions"><button type="button" class="search-trigger" id="search-trigger"><span id="search-icon"></span><span>搜索工作空间</span><kbd>Ctrl K</kbd></button><span class="connection-label" id="connection-label"><span class="status-dot"></span>本地连接</span><span class="avatar" aria-label="个人工作区">L</span></div>
+      </header>
+      <main id="main" tabindex="-1" aria-busy="true"><div class="initial-loading"><span class="spinner"></span><h1>正在打开工作空间</h1><p>从本地加载项目与材料…</p></div></main>
+      <footer class="main-footer"><span>Local WorkOS <span class="footer-divider">/</span> 从信息到行动</span><span id="footer-workspace">个人工作区 · 本地存储</span></footer>
+    </div>
+  </div>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title"></dialog>
+  <dialog id="document-dialog" class="document-dialog" aria-labelledby="document-title"></dialog>
+  <dialog id="search-dialog" class="search-dialog" aria-label="搜索工作空间"></dialog>
+  <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
+  <input id="upload-input" type="file" accept=".txt,.md,.pdf,.docx" multiple hidden>
+  <input id="restore-input" type="file" accept=".json,application/json" hidden>
+</body>
+</html>

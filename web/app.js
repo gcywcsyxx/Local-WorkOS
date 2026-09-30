@@ -1,0 +1,871 @@
+/* Local WorkOS — no framework, no CDN, no outbound requests from the browser. */
+(() => {
+  'use strict';
+
+  // All server/user text crosses the HTML boundary through esc(); no Markdown execution.
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+  const ICONS = {
+    home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
+    grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    projects: '<path d="M4 21V6h10v15M14 10h6v11M2 21h20M7 9h4M7 13h4M7 17h4M17 13v1M17 17v1M7 6V3h4v3"/>',
+    research: '<path d="M5 3h10l4 4v7M15 3v5h4M5 3v18h8M8 11h6M8 15h3"/><circle cx="17" cy="17" r="4"/><path d="m20 20 2 2"/>',
+    meetings: '<path d="M3 4h18v13H8l-5 4zM7 8h10M7 12h7"/>',
+    tasks: '<rect x="4" y="4" width="16" height="17" rx="2"/><path d="M9 4V2h6v2M8 10l2 2 5-5M8 16h8"/>',
+    memory: '<path d="M12 4C8 1 5 3 5 6c-4 0-4 7-1 8-2 3 1 7 4 6 1 2 4 1 4-1V4zm0 0c4-3 7-1 7 2 4 0 4 7 1 8 2 3-1 7-4 6-1 2-4 1-4-1M5 6l3 2M4 14h4M16 8l3-2M16 14h4M8 17l4-2 4 2"/>',
+    finance: '<path d="M3 3v18h18M7 17v-5M12 17V8M17 17V5M6 7l5-3 4 2 5-4"/>',
+    deliverables: '<path d="M4 8h16v13H4zM3 4h18v4H3zM9 12h6M12 12v5m-3-3 3 3 3-3"/>',
+    settings: '<path d="m10 3-1 3-3 1-3-1-1 4 3 2 1 3-1 3 4 2 2-2h3l2 2 4-3-1-3 1-3 2-2-2-4-3 1-3-1-1-3z" transform="translate(1 0) scale(.9)"/><circle cx="12" cy="12" r="3"/>',
+    search: '<circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+    arrow: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+    chevron: '<path d="m9 5 7 7-7 7"/>',
+    down: '<path d="m6 9 6 6 6-6"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    circleCheck: '<circle cx="12" cy="12" r="9"/><path d="m7 12 3 3 7-7"/>',
+    warning: '<path d="m12 3 10 18H2zM12 9v5M12 17v.5"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 10v7M12 7v.5"/>',
+    edit: '<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14zM3 22h18"/>',
+    trash: '<path d="M3 6h18M8 6V3h8v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+    upload: '<path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5"/>',
+    download: '<path d="M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"/>',
+    file: '<path d="M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h6"/>',
+    book: '<path d="M12 5C9 3 5 3 2 4v16c4-1 7-1 10 1 3-2 6-2 10-1V4c-3-1-7-1-10 1v16"/>',
+    lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 14v3"/>',
+    shield: '<path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6zM8 12l3 3 5-6"/>',
+    user: '<circle cx="12" cy="7" r="4"/><path d="M4 21v-3a8 8 0 0 1 16 0v3"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 2v6M17 2v6M3 11h18M7 15h3M14 15h3"/>',
+    spark: '<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z"/>',
+    quote: '<path d="M3 12V5h7v8H6c0 3-1 5-4 6M14 12V5h7v8h-4c0 3-1 5-4 6"/>',
+    link: '<path d="m10 7 3-3a5 5 0 0 1 7 7l-3 3M14 17l-3 3a5 5 0 0 1-7-7l3-3M8 16l8-8"/>',
+    refresh: '<path d="M20 4v6h-6M4 20v-6h6M4 9a8 8 0 0 1 14-5l2 3M4 17l2 3a8 8 0 0 0 14-5"/>',
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    switch: '<path d="M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4"/>',
+    database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
+    logout: '<path d="M9 3H4v18h5M13 7l5 5-5 5M8 12h13"/>',
+    external: '<path d="M14 3h7v7M21 3 10 14M10 4H3v17h17v-7"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V3h8v4M3 12c6 4 12 4 18 0M10 14h4"/>'
+  };
+  const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.file}</svg>`;
+  const ROUTES = [
+    ['overview', '工作总览', 'OVERVIEW', 'grid'], ['projects', '公司与项目', 'PROJECTS', 'projects'],
+    ['research', '研究工作台', 'RESEARCH', 'research'], ['meetings', '会议中心', 'MEETINGS', 'meetings'],
+    ['tasks', '任务中心', 'TASKS', 'tasks'], ['memory', '知识与记忆', 'KNOWLEDGE', 'memory'],
+    ['finance', '回报测算', 'RETURN MODEL', 'finance'], ['deliverables', '交付中心', 'DELIVERABLES', 'deliverables'],
+    ['settings', '设置', 'SETTINGS', 'settings']
+  ];
+  const STAGES = ['线索', '初筛', '尽调', '投委会', '投后', '归档'];
+  const PRIORITIES = ['高', '中', '低'];
+  const STATUSES = ['待办', '进行中', '完成'];
+  const NOTE_STATUSES = ['待核实', '已核实', '暂不采用'];
+  const KINDS = ['研究简报', '会议纪要', '项目周报', '自定义'];
+  const FINANCE_DEFAULTS = Object.freeze({ revenue: 120, growth: .25, margin: .2, entry_multiple: 12, exit_multiple: 14, leverage: .35, years: 5, cash_conversion: .5, interest_rate: .06 });
+  const FINANCE_FIELDS = [
+    ['revenue', '起始收入', '百万元', 0.01, 1000000000, .01], ['growth', '收入年增长率', '%', -50, 100, .1],
+    ['margin', 'EBITDA 利润率', '%', 1, 100, .1], ['entry_multiple', '进入倍数', '× EBITDA', .1, 50, .1],
+    ['exit_multiple', '退出倍数', '× EBITDA', 0, 50, .1], ['leverage', '初始债务 / EV', '%', 0, 80, .1],
+    ['years', '持有期', '年', 1, 10, 1], ['cash_conversion', '现金转化率', '%', 0, 100, .1],
+    ['interest_rate', '债务年利率', '%', 0, 50, .1]
+  ];
+  const PERCENT_FIELDS = new Set(['growth', 'margin', 'leverage', 'cash_conversion', 'interest_rate']);
+  const LABELS = { projects: '项目', tasks: '任务', documents: '资料', meetings: '会议', notes: '研究结论', deliverables: '交付' };
+  const app = { workspace: 'personal', csrf: '', boot: null, data: null, page: 'overview', epoch: 0, modalBusy: false, mutations: 0, stopped: false, uploadBusy: false };
+  const views = new Map();
+  function freshView() {
+    return { page: 'overview', projectStage: '全部', projectQuery: '', projectId: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceQuery: '', selectedSources: new Set(), answers: [], askMode: 'local', question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false };
+  }
+  function view() { if (!views.has(app.workspace)) views.set(app.workspace, freshView()); return views.get(app.workspace); }
+  function loadFinance() {
+    try { const value = JSON.parse(localStorage.getItem(`local-workos:${app.workspace}:assumptions`) || 'null'); return { ...FINANCE_DEFAULTS, ...(value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key, number]) => key in FINANCE_DEFAULTS && Number.isFinite(number))) : {}) }; }
+    catch { return { ...FINANCE_DEFAULTS }; }
+  }
+  function persistFinance() { try { localStorage.setItem(`local-workos:${app.workspace}:assumptions`, JSON.stringify(view().finance)); } catch { /* Private browsing can deny optional preference storage. */ } }
+  const list = collection => Array.isArray(app.data?.[collection]) ? app.data[collection] : [];
+  const record = (collection, id) => list(collection).find(item => String(item.id) === String(id));
+  const projectName = id => record('projects', id)?.name || (id ? '未关联项目' : '未关联项目');
+  const workspaceName = () => app.workspace === 'personal' ? '个人工作区' : '演示工作区';
+  const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
+  function dateLabel(value, withTime = false) {
+    if (!value) return '未设置';
+    const date = new Date(String(value).includes('T') || String(value).includes(' ') ? value : `${value}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) + (withTime ? ` ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '');
+  }
+  const overdue = task => Boolean(task.due && task.due < today() && task.status !== '完成');
+  const number = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
+  const percent = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? `${(Number(value) * 100).toFixed(1)}%` : '不可计算';
+  const excerpt = (value, max = 120) => { const text = String(value || '').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; };
+  const selectedAttr = (value, expected) => String(value ?? '') === String(expected ?? '') ? ' selected' : '';
+  const options = (values, selected) => values.map(value => `<option value="${esc(value)}"${selectedAttr(value, selected)}>${esc(value)}</option>`).join('');
+  const projectOptions = selected => `<option value="">不关联项目</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}`;
+  const projectFilter = (id, selected, label = '全部项目') => `<select id="${esc(id)}" class="compact-select" aria-label="按项目筛选"><option value="">${esc(label)}</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}</select>`;
+  const badge = (value, tone) => `<span class="tag ${tone || ({ 高: 'red', 中: 'amber', 低: 'gray', 待核实: 'amber', 已核实: 'green', 暂不采用: 'gray', 尽调: 'green', 初筛: 'blue', 投委会: 'amber', 归档: 'gray', 完成: 'green', 进行中: 'blue' }[value] || '')}">${esc(value)}</span>`;
+  const actionButton = (label, action, symbol = '', classes = '', attrs = '') => `<button type="button" class="button ${classes}" data-action="${esc(action)}" ${attrs}>${symbol ? icon(symbol) : ''}${esc(label)}</button>`;
+  const iconButton = (label, action, symbol, attrs = '', classes = '') => `<button type="button" class="icon-button ${classes}" title="${esc(label)}" aria-label="${esc(label)}" data-action="${esc(action)}" ${attrs}>${icon(symbol)}</button>`;
+  const empty = (symbol, title, text, button = '', compact = false) => `<div class="empty${compact ? ' compact' : ''}"><span class="empty-icon">${icon(symbol)}</span><h3>${esc(title)}</h3><p>${esc(text)}</p>${button}</div>`;
+  const heading = (title, eyebrow, description, actions = '') => `<div class="page-heading"><div><div class="eyebrow">${esc(eyebrow)}</div><h1>${esc(title)}</h1><p>${esc(description)}</p></div>${actions ? `<div class="heading-actions">${actions}</div>` : ''}</div>`;
+  const banner = (title, message, tone = '', symbol = 'shield') => `<div class="banner ${tone}">${icon(symbol)}<div>${title ? `<strong>${esc(title)}</strong>` : ''}${esc(message)}</div></div>`;
+  const panelTitle = (title, symbol, action = '') => `<div class="panel-header"><div class="panel-title">${icon(symbol)}<h2>${esc(title)}</h2></div>${action}</div>`;
+  const searchInput = (id, placeholder, value) => `<div class="input-search">${icon('search')}<input id="${esc(id)}" type="search" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(value)}" autocomplete="off"></div>`;
+  const loading = text => `<div class="inline-loading"><span class="spinner"></span>${esc(text)}</div>`;
+  const inputField = (name, label, value = '', opts = {}) => `<div class="field"><label for="field-${esc(name)}">${esc(label)}${opts.required ? '' : '<span class="optional">选填</span>'}</label><input id="field-${esc(name)}" name="${esc(name)}" type="${opts.type || 'text'}" value="${esc(value)}" ${opts.required ? 'required' : ''} maxlength="${opts.maxlength || 500}" ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ''}>${opts.hint ? `<span class="hint">${esc(opts.hint)}</span>` : ''}</div>`;
+  const textareaField = (name, label, value = '', opts = {}) => `<div class="field"><label for="field-${esc(name)}">${esc(label)}${opts.required ? '' : '<span class="optional">选填</span>'}</label><textarea id="field-${esc(name)}" name="${esc(name)}" rows="${opts.rows || 4}" ${opts.required ? 'required' : ''} maxlength="${opts.maxlength || 1000000}" placeholder="${esc(opts.placeholder || '')}">${esc(value)}</textarea>${opts.hint ? `<span class="hint">${esc(opts.hint)}</span>` : ''}</div>`;
+  const selectField = (name, label, content) => `<div class="field"><label for="field-${esc(name)}">${esc(label)}</label><select id="field-${esc(name)}" name="${esc(name)}">${content}</select></div>`;
+  const projectField = value => selectField('project_id', '关联项目', projectOptions(value));
+
+  class StaleRequestError extends Error { constructor() { super('工作区已切换'); this.name = 'StaleRequestError'; } }
+  async function api(path, options = {}) {
+    const epoch = app.epoch;
+    const headers = { 'X-Workspace': app.workspace, 'X-CSRF-Token': app.csrf, ...(options.headers || {}) };
+    const method = options.method || (options.body !== undefined ? 'POST' : 'GET');
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (method !== 'GET') app.mutations++;
+    try {
+      const response = await fetch(`/api${path}`, { method, headers, cache: 'no-store', credentials: 'same-origin', ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}), ...(options.signal ? { signal: options.signal } : {}) });
+      if (epoch !== app.epoch) throw new StaleRequestError();
+      if (!response.ok) {
+        let message = `请求失败（${response.status}）`;
+        try { const error = await response.json(); if (error.error) message = String(error.error); } catch { /* HTTP status remains useful when the server cannot return JSON. */ }
+        throw new Error(message);
+      }
+      if (options.raw) return response;
+      if (response.status === 204) return {};
+      const result = await response.json();
+      if (epoch !== app.epoch) throw new StaleRequestError();
+      return result;
+    } catch (error) {
+      if (error instanceof TypeError && /fetch|network|failed/i.test(error.message)) throw new Error('无法连接本地服务。请确认 Local WorkOS 启动器仍在运行，然后重试。');
+      throw error;
+    } finally { if (method !== 'GET') app.mutations--; }
+  }
+  function notify(message, error = false) {
+    const element = document.createElement('div'); element.className = `toast${error ? ' error' : ''}`;
+    element.innerHTML = `${icon(error ? 'warning' : 'circleCheck')}<span>${esc(message)}</span><button type="button" aria-label="关闭提示">${icon('close')}</button>`;
+    $('button', element).onclick = () => element.remove(); $('#toast-region').append(element);
+    setTimeout(() => element.remove(), error ? 10000 : 5500);
+  }
+  function showError(error) { if (error?.name !== 'StaleRequestError' && error?.name !== 'AbortError') notify(error?.message || '操作未完成，请重试。', true); }
+  async function withBusy(button, label, action) {
+    if (button?.disabled) return;
+    const original = button?.innerHTML;
+    if (button) { button.disabled = true; button.innerHTML = `<span class="spinner"></span>${esc(label)}`; }
+    try { return await action(); } catch (error) { showError(error); }
+    finally { if (button?.isConnected) { button.disabled = false; button.innerHTML = original; } }
+  }
+  async function refreshData() {
+    const data = await api('/state');
+    app.data = data;
+    const available = new Set(list('documents').map(item => String(item.id)));
+    view().selectedSources = new Set([...view().selectedSources].filter(id => available.has(String(id))));
+    return data;
+  }
+  async function boot() {
+    app.stopped = false; $('#main').setAttribute('aria-busy', 'true');
+    try {
+      app.boot = await api('/bootstrap');
+      app.csrf = app.boot.csrf;
+      if (!app.csrf) throw new Error('本地服务未返回安全令牌，请重启服务后重试。');
+      await refreshData();
+      const hash = location.hash.slice(1);
+      app.page = ROUTES.some(route => route[0] === hash) ? hash : view().page;
+      view().page = app.page; render();
+      $('#connection-label').innerHTML = '<span class="status-dot"></span>本地连接';
+    } catch (error) {
+      if (error.name === 'StaleRequestError') return;
+      renderShell();
+      $('#main').innerHTML = `<section class="state-error"><div class="eyebrow">LOCAL CONNECTION</div><h1>还没有连接到本地工作空间</h1><p>${esc(error.message)}</p>${actionButton('重新连接', 'retry', 'refresh', 'primary')}</section>`;
+      $('#connection-label').textContent = '连接中断';
+    } finally { $('#main').setAttribute('aria-busy', 'false'); }
+  }
+  function renderShell() {
+    const route = ROUTES.find(item => item[0] === app.page) || ROUTES[0];
+    document.title = `${route[1]} · Local WorkOS`;
+    const counts = { projects: list('projects').filter(item => item.stage !== '归档').length, tasks: list('tasks').filter(item => item.status !== '完成').length, deliverables: list('deliverables').length };
+    $('#primary-nav').innerHTML = ROUTES.filter(item => item[0] !== 'settings').map(([id, title, , symbol]) => `<button type="button" class="nav-item${app.page === id ? ' active' : ''}" data-page="${id}"${app.page === id ? ' aria-current="page"' : ''}>${icon(symbol)}<span>${title}</span>${counts[id] ? `<span class="nav-count">${counts[id]}</span>` : ''}</button>`).join('');
+    $('#settings-nav').className = `nav-item settings-nav${app.page === 'settings' ? ' active' : ''}`;
+    $('#settings-nav').innerHTML = `${icon('settings')}<span>设置与连接</span>`;
+    if (app.page === 'settings') $('#settings-nav').setAttribute('aria-current', 'page'); else $('#settings-nav').removeAttribute('aria-current');
+    $('#workspace-switch').innerHTML = `<span class="workspace-icon">${icon(app.workspace === 'personal' ? 'user' : 'briefcase')}</span><span class="workspace-copy">${workspaceName()}<small>${app.workspace === 'personal' ? 'PERSONAL · 仅自己可见' : 'DEMO · 全部为合成数据'}</small></span>${icon('down')}`;
+    $('#breadcrumb').innerHTML = `<span>${workspaceName()}</span><span class="slash">/</span><span class="current">${route[1]}</span>`;
+    $('#footer-workspace').textContent = `${workspaceName()} · ${app.workspace === 'demo' ? '合成演示数据' : '本地存储'}`;
+    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.0';
+  }
+  function render() {
+    renderShell();
+    if (!app.data) return;
+    const renderers = { overview: renderOverview, projects: renderProjects, tasks: renderTasks, research: renderResearch, meetings: renderMeetings, memory: renderMemory, finance: renderFinance, deliverables: renderDeliverables, settings: renderSettings };
+    $('#main').innerHTML = renderers[app.page]();
+    $('#main').setAttribute('aria-busy', 'false');
+    bindPage();
+  }
+  function closeSidebar() { $('#sidebar').classList.remove('open'); $('#sidebar-scrim').hidden = true; $('#mobile-menu').setAttribute('aria-expanded', 'false'); }
+  async function canLeave() {
+    if (view().deliverableSaving) { notify('交付正在保存，请稍候。'); return false; }
+    if (view().deliverableDirty) return confirmDialog('放弃尚未保存的交付修改？', '页面中的修改尚未写入本地。你可以取消并先保存，或放弃修改后继续。', '放弃修改', true);
+    return true;
+  }
+  async function navigate(page, opts = {}) {
+    if (!ROUTES.some(route => route[0] === page)) return false;
+    if (page !== app.page && !await canLeave()) return false;
+    if (page === app.page && page === 'deliverables' && view().deliverableDirty) { closeSidebar(); return true; }
+    if (app.page === 'meetings') captureMeetingDraft();
+    if (page !== app.page) view().deliverableDirty = false;
+    app.page = page; view().page = page;
+    if (opts.projectId !== undefined) {
+      if (page === 'projects') view().projectId = opts.projectId;
+      if (page === 'tasks') view().taskProject = opts.projectId;
+      if (page === 'research') view().researchProject = opts.projectId;
+      if (page === 'meetings') view().meetingProject = opts.projectId;
+    }
+    history.replaceState(null, '', `#${page}`); closeSidebar(); render();
+    $('#main').focus({ preventScroll: true }); window.scrollTo({ top: 0, behavior: 'instant' });
+    return true;
+  }
+  async function switchWorkspace(next) {
+    if (!['personal', 'demo'].includes(next) || next === app.workspace) return;
+    if (app.mutations || app.uploadBusy) { notify('当前操作尚未完成，请稍后切换工作区。', true); return; }
+    if (!await canLeave()) return;
+    if (app.page === 'meetings') captureMeetingDraft();
+    view().deliverableDirty = false;
+    if (app.page === 'settings') $('#ai-settings-form')?.reset();
+    $$('dialog[open]').forEach(dialog => dialog.close());
+    app.workspace = next; app.epoch++; app.csrf = ''; app.data = null; app.boot = null;
+    app.page = view().page; history.replaceState(null, '', `#${app.page}`);
+    closeSidebar(); renderShell(); $('#main').innerHTML = loading(`正在切换到${workspaceName()}…`);
+    await boot();
+    if (app.data) notify(`已切换到${workspaceName()}，两套数据独立保存。`);
+  }
+
+  // Accessible native dialogs, including inline validation and destructive confirmations.
+  function openModal(title, body, onSubmit, options = {}) {
+    const dialog = $('#modal');
+    if (dialog.open) dialog.close();
+    dialog.returnValue = '';
+    dialog.className = `modal${options.wide ? ' wide' : ''}`;
+    dialog.innerHTML = `<form id="modal-form"><div class="modal-header"><h2 id="modal-title">${esc(title)}</h2><button type="button" class="icon-button" data-close-dialog="modal" aria-label="关闭">${icon('close')}</button></div><div class="modal-content"><div id="modal-error" class="form-error" role="alert"></div>${body}</div><div class="modal-footer">${options.deleteCollection ? `<button type="button" class="text-button danger-link" data-action="modal-delete" data-collection="${esc(options.deleteCollection)}" data-id="${esc(options.deleteId)}">${icon('trash')}删除</button>` : ''}<button type="button" class="button" data-close-dialog="modal">${esc(options.cancelText || '取消')}</button><button type="submit" class="button ${options.danger ? 'danger solid' : 'primary'}" id="modal-submit">${esc(options.submitText || '保存')}</button></div></form>`;
+    $('#modal-form').onsubmit = async event => {
+      event.preventDefault();
+      if (app.modalBusy || !event.currentTarget.reportValidity()) return;
+      const formData = new FormData(event.currentTarget);
+      const submit = $('#modal-submit'); const html = submit.innerHTML;
+      const controls = $$('input,select,textarea,button', dialog).filter(element => !element.disabled);
+      app.modalBusy = true; controls.forEach(element => { element.disabled = true; });
+      submit.innerHTML = `<span class="spinner"></span>${esc(options.busyText || '正在保存…')}`; $('#modal-error').textContent = '';
+      try { await onSubmit(formData, event.currentTarget); app.modalBusy = false; dialog.close('saved'); }
+      catch (error) { if (error.name !== 'StaleRequestError') { $('#modal-error').textContent = error.message || '操作未完成。'; $('#modal-error').scrollIntoView({ block: 'nearest' }); } }
+      finally { app.modalBusy = false; controls.forEach(element => { element.disabled = false; }); if (submit.isConnected) submit.innerHTML = html; }
+    };
+    dialog.showModal();
+    return dialog;
+  }
+  function confirmDialog(title, message, label = '确认', danger = false) {
+    return new Promise(resolve => {
+      // A separate native dialog avoids reusing an editor whose close event is queued.
+      const dialog = document.createElement('dialog'); dialog.className = 'modal';
+      dialog.setAttribute('aria-label', title);
+      dialog.innerHTML = `<form method="dialog"><div class="modal-header"><h2>${esc(title)}</h2><button type="submit" value="cancel" class="icon-button" aria-label="取消">${icon('close')}</button></div><div class="modal-content"><p class="confirm-copy">${esc(message)}</p></div><div class="modal-footer"><button type="submit" value="cancel" class="button" autofocus>取消</button><button type="submit" value="confirm" class="button ${danger ? 'danger solid' : 'primary'}">${esc(label)}</button></div></form>`;
+      dialog.addEventListener('close', () => { const confirmed = dialog.returnValue === 'confirm'; dialog.remove(); resolve(confirmed); }, { once: true });
+      document.body.append(dialog); dialog.showModal();
+    });
+  }
+  function workspaceDialog() {
+    let next = app.workspace;
+    const dialog = openModal('选择工作区', `<div class="banner mb-15">${icon('database')}<div>个人与演示使用独立本地数据库。切换不会复制、合并或向外发送数据。</div></div><div class="field"><label for="workspace-choice">工作区</label><select name="workspace" id="workspace-choice">${options(['personal', 'demo'], app.workspace).replace('>personal<', '>个人工作区 · 我的工作<').replace('>demo<', '>演示工作区 · 合成示例<')}</select></div>`, async form => {
+      next = String(form.get('workspace'));
+    }, { submitText: '切换工作区', busyText: '正在切换…' });
+    dialog.addEventListener('close', () => { if (dialog.returnValue === 'saved') switchWorkspace(next).catch(showError); }, { once: true });
+  }
+
+  // Persistent core records share one CRUD implementation and one source of truth.
+  async function editRecord(collection, id = '', preset = {}) {
+    if (!(collection in LABELS)) return;
+    let existing = id ? record(collection, id) : null;
+    if (id && !existing) { notify('这条记录已不存在，请刷新后重试。', true); return; }
+    if (collection === 'documents' && id) {
+      existing = await api(`/documents/${encodeURIComponent(id)}`);
+      if (existing.kind === 'memory') { await openDocument(id); return; }
+    }
+    if (view().deliverableDirty) {
+      if (!await canLeave()) return;
+      view().deliverableDirty = false; render();
+    }
+    if (app.page === 'meetings') captureMeetingDraft();
+    const item = { ...(existing || {}), ...preset };
+    let body = '';
+    if (collection === 'projects') {
+      body = inputField('name', '项目名称', item.name, { required: true, placeholder: '输入公司或项目名称', maxlength: 200 }) + '<div class="field-row">' + inputField('sector', '行业 / 赛道', item.sector, { placeholder: '例如：企业服务' }) + inputField('owner', '负责人', item.owner) + '</div><div class="field-row">' + selectField('stage', '推进阶段', options(STAGES, item.stage || '线索')) + selectField('priority', '优先级', options(PRIORITIES, item.priority || '中')) + '</div>' + textareaField('thesis', '投资逻辑 / 核心判断', item.thesis, { rows: 4 }) + textareaField('next_step', '下一步行动', item.next_step, { rows: 2 }) + '<div class="field-row">' + inputField('valuation', '估值备注', item.valuation) + inputField('tags', '标签', item.tags, { hint: '多个标签以逗号分隔' }) + '</div>';
+    } else if (collection === 'tasks') {
+      body = inputField('title', '任务标题', item.title, { required: true, maxlength: 300 }) + projectField(item.project_id) + '<div class="field-row">' + selectField('status', '状态', options(STATUSES, item.status || '待办')) + selectField('priority', '优先级', options(PRIORITIES, item.priority || '中')) + '</div><div class="field-row">' + inputField('owner', '负责人', item.owner) + inputField('due', '到期日期', item.due, { type: 'date' }) + '</div>' + textareaField('description', '任务说明', item.description, { rows: 4 }) + (item.meeting_id ? banner('来自会议', record('meetings', item.meeting_id)?.title || '已关联会议', '', 'meetings') + '<div class="mb-15"></div>' : '');
+    } else if (collection === 'documents') {
+      body = inputField('title', '资料标题', item.title, { required: true, maxlength: 300 }) + projectField(item.project_id) + inputField('category', '分类', item.category, { placeholder: '例如：行业研究、访谈、公开资料' }) + textareaField('content', '原文内容', item.content, { required: true, rows: 12, hint: '按纯文本保存；段落用于本地检索与引用定位。修改会重新分段。' }) + inputField('source_ref', '来源备注', item.source_ref, { placeholder: '可记录文件路径或来源说明；不会自动访问' });
+    } else if (collection === 'meetings') {
+      body = inputField('title', '会议标题', item.title, { required: true, maxlength: 300 }) + projectField(item.project_id) + '<div class="field-row">' + inputField('date', '会议日期', item.date || today(), { type: 'date', required: true }) + inputField('participants', '参会人', item.participants, { placeholder: '用逗号分隔' }) + '</div>' + textareaField('transcript', '逐字稿 / 会议原文', item.transcript, { rows: 10, placeholder: '粘贴逐字稿。保存后可生成规则摘要与待确认行动项。' }) + textareaField('summary', '会议纪要', item.summary, { rows: 5, placeholder: '可直接编辑，也可保存后使用规则引擎生成草稿。' });
+    } else if (collection === 'notes') {
+      body = inputField('title', '结论标题', item.title, { required: true, maxlength: 300 }) + '<div class="field-row">' + projectField(item.project_id) + selectField('status', '核实状态', options(NOTE_STATUSES, item.status || '待核实')) + '</div>' + textareaField('body', '研究结论', item.body, { required: true, rows: 8 }) + selectField('document_id', '关联证据材料', `<option value="">暂不关联</option>${list('documents').map(doc => `<option value="${esc(doc.id)}"${selectedAttr(doc.id, item.document_id)}>${esc(doc.title)}</option>`).join('')}`) + textareaField('source_quote', '原文引用 / 证据线索', item.source_quote, { rows: 3 });
+    } else if (collection === 'deliverables') {
+      body = inputField('title', '交付标题', item.title, { required: true, maxlength: 300 }) + '<div class="field-row">' + projectField(item.project_id) + selectField('kind', '交付类型', options(KINDS, item.kind || '自定义')) + '</div>' + textareaField('body', '正文', item.body, { rows: 12, placeholder: '使用纯文本或 Markdown 编写。保存后可继续编辑、导出。' });
+    }
+    openModal(`${id ? '编辑' : '新建'}${LABELS[collection]}`, body, async form => {
+      const payload = Object.fromEntries(form.entries());
+      for (const key of Object.keys(payload)) payload[key] = String(payload[key]).trim();
+      if (collection === 'documents' && !id) { payload.kind = 'research'; payload.private = true; }
+      if (collection === 'tasks' && item.meeting_id) payload.meeting_id = item.meeting_id;
+      const saved = await api(`/${collection}${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PATCH' : 'POST', body: payload });
+      const savedId = saved.id || id;
+      if (collection === 'projects') view().projectId = savedId;
+      if (collection === 'meetings') { view().meetingId = savedId; view().drafts.delete(String(savedId)); }
+      if (collection === 'deliverables') { view().deliverableId = savedId; view().deliverableDirty = false; }
+      await refreshData(); render(); notify(`${LABELS[collection]}已${id ? '更新' : '保存'}到${workspaceName()}。`);
+    }, { wide: ['documents', 'meetings', 'deliverables'].includes(collection), ...(id ? { deleteCollection: collection, deleteId: id } : {}) });
+  }
+  async function deleteRecord(collection, id) {
+    const item = record(collection, id);
+    if (!item || !(collection in LABELS)) return;
+    const name = item.title || item.name;
+    const message = collection === 'projects' ? `确定删除“${name}”？有任务、资料、会议或交付关联的项目不能直接删除，请先解除关联。` : collection === 'documents' && item.kind === 'memory' ? `确定移除“${name}”的导入副本？只删除此工作区中的记录，不改动任何源记忆文件。` : `确定删除“${name}”？此操作无法直接撤销，可先在设置中导出备份。`;
+    if (!await confirmDialog(`删除${LABELS[collection]}`, message, '确认删除', true)) return;
+    await api(`/${collection}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (collection === 'deliverables' && String(view().deliverableId) === String(id)) { view().deliverableId = ''; view().deliverableDirty = false; }
+    if (collection === 'meetings') view().drafts.delete(String(id));
+    await refreshData(); render(); notify(`${LABELS[collection]}已删除。`);
+  }
+
+  // PAGES
+  function renderOverview() {
+    const projects = list('projects'); const tasks = list('tasks'); const documents = list('documents');
+    const openTasks = tasks.filter(item => item.status !== '完成');
+    const orderedTasks = [...openTasks].sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority)).slice(0, 5);
+    const activeProjects = projects.filter(item => item.stage !== '归档');
+    const researchCount = documents.filter(item => item.kind !== 'memory').length; const memoryCount = documents.filter(item => item.kind === 'memory').length;
+    const pendingNotes = list('notes').filter(item => item.status === '待核实').length;
+    const evidenceProjects = projects.filter(project => documents.some(doc => String(doc.project_id) === String(project.id))).length;
+    const date = new Date(); const hour = date.getHours(); const greeting = hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 19 ? '下午好' : '晚上好';
+    const metrics = [
+      ['在跟项目', activeProjects.length, `${projects.filter(item => item.stage === '尽调').length} 个进入尽调`, '项目进展，一目了然', 'projects'],
+      ['待办事项', openTasks.length, `${openTasks.filter(overdue).length} 项已逾期`, `${tasks.filter(item => item.status === '完成').length} 项已完成`, 'tasks'],
+      ['研究材料', researchCount, `${memoryCount} 条知识记忆`, `${pendingNotes} 条结论待核实`, 'research'],
+      ['已保存交付', list('deliverables').length, `${list('meetings').length} 场会议记录`, '沉淀可复用的工作成果', 'deliverables']
+    ];
+    return `<div class="overview-welcome"><div><div class="eyebrow">YOUR PERSONAL WORKSPACE</div><h1 class="welcome-title">${greeting}，研究员<span class="muted">。</span></h1><p class="welcome-sub">让信息有出处，让判断有依据，让每一步推进都有着落。</p></div><div class="date-card"><div class="day">${esc(date.toLocaleDateString('zh-CN', { weekday: 'long' }))}</div><div class="date">${esc(date.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }))}</div><span class="workspace-chip"><span class="status-dot"></span>${app.workspace === 'personal' ? '个人空间 · 本地优先' : '合成数据 · 演示空间'}</span></div></div>
+      ${app.workspace === 'demo' ? `<div class="section-gap">${banner('', '当前为演示工作区，所有项目与材料均为合成示例，与个人数据完全隔离。', 'blue', 'info')}</div>` : ''}
+      <div class="metric-grid">${metrics.map(([label, value, note, extra, symbol]) => `<div class="metric-card"><span class="metric-icon">${icon(symbol)}</span><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note"><b>${esc(note)}</b><br>${esc(extra)}</div></div>`).join('')}</div>
+      ${!projects.length && !documents.length && !tasks.length ? `<section class="onboarding"><span class="onboarding-mark">${icon('spark')}</span><div><h2>从一个项目，开启清晰的工作流</h2><p>创建项目 → 导入材料 → 形成判断 → 跟进行动。你的个人空间尚无业务记录。</p></div>${actionButton('创建第一个项目', 'create', 'plus', 'primary', 'data-collection="projects"')}</section>` : ''}
+      <div class="overview-grid"><section class="panel">${panelTitle('接下来，值得关注', 'tasks', '<button type="button" class="text-button" data-page="tasks">全部任务 ' + icon('arrow') + '</button>')}<div class="panel-body">${orderedTasks.length ? orderedTasks.map(task => `<div class="task-line"><button class="task-check" type="button" data-action="task-toggle" data-id="${esc(task.id)}" aria-label="完成任务：${esc(task.title)}"></button><div class="task-copy"><button type="button" class="task-title" data-action="edit" data-collection="tasks" data-id="${esc(task.id)}">${esc(task.title)}</button><div class="task-meta"><span>${esc(projectName(task.project_id))}</span><span>·</span>${badge(task.priority || '中')}<span>${esc(task.owner || '待分配')}</span></div></div><span class="task-date${overdue(task) ? ' overdue' : ''}">${task.due ? `${overdue(task) ? '逾期 · ' : ''}${esc(dateLabel(task.due))}` : '未定日期'}</span></div>`).join('') : empty('circleCheck', '当前没有待办事项', '把下一步写成任务，交给工作空间记住。', actionButton('新建任务', 'create', 'plus', 'small', 'data-collection="tasks"'), true)}</div></section>
+      <section class="panel">${panelTitle('项目推进', 'projects', '<button type="button" class="text-button" data-page="projects">查看项目 ' + icon('arrow') + '</button>')}<div class="panel-body">${STAGES.filter(stage => stage !== '归档').map(stage => { const count = projects.filter(item => item.stage === stage).length; return `<div class="progress-row"><span class="progress-name">${stage}</span><div class="progress-track"><div class="progress-fill" style="width:${activeProjects.length ? Math.round(count / activeProjects.length * 100) : 0}%"></div></div><span class="progress-value">${count}</span></div>`; }).join('')}<div class="pipeline-foot">${icon('link')}<span>${evidenceProjects} / ${projects.length} 个项目已关联证据材料 · ${pendingNotes} 条判断待核实</span></div></div></section></div>
+      <div class="section-label"><h2>开始一段专注工作</h2><span>QUICK ACCESS</span></div><div class="quick-actions">${[
+        ['upload', '导入研究材料', '从证据开始，保留出处', 'research-import'], ['meetings', '记录一次会议', '从讨论到可确认的行动', 'new-meeting'], ['finance', '运行回报测算', '用假设检验投资逻辑', 'go-finance'], ['deliverables', '编写工作交付', '把判断沉淀为文档', 'new-deliverable']
+      ].map(([symbol, label, text, action]) => `<button type="button" class="quick-action" data-action="${action}"><span class="quick-icon">${icon(symbol)}</span><span><b>${label}</b><small>${text}</small></span></button>`).join('')}</div>
+      <div class="overview-grid mt-18"><section class="panel">${panelTitle('最近沉淀', 'book')}<div class="panel-body">${list('notes').length ? [...list('notes')].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 3).map(note => `<div class="task-line"><span class="quick-icon">${icon('quote')}</span><div class="task-copy"><button type="button" class="task-title" data-action="edit" data-collection="notes" data-id="${esc(note.id)}">${esc(note.title)}</button><div class="task-meta">${badge(note.status)}<span>${esc(projectName(note.project_id))}</span></div></div></div>`).join('') : empty('book', '好的判断，值得留存', '在研究工作台保存有出处的结论，构建自己的判断记录。', '', true)}</div></section><section class="panel">${panelTitle('工作动态', 'clock')}<div class="activity-list">${list('activity').length ? list('activity').slice(0, 4).map(item => `<div class="activity-line"><span class="activity-dot"></span><span class="activity-copy">${esc(item.message || item.description || item.title || item.action || '工作空间已更新')}</span><time>${esc(dateLabel(item.created_at || item.time, true))}</time></div>`).join('') : empty('clock', '工作，从这里开始', '这里记录业务变更，不记录文件打开历史。', '', true)}</div></section></div>`;
+  }
+
+  function renderProjects() {
+    const state = view(); const query = state.projectQuery.toLowerCase();
+    const projects = list('projects').filter(item => (state.projectStage === '全部' || item.stage === state.projectStage) && `${item.name} ${item.sector} ${item.owner} ${item.tags} ${item.thesis}`.toLowerCase().includes(query));
+    const selected = record('projects', state.projectId);
+    return heading('公司与项目', 'PROJECT PIPELINE', '从线索到投后，把材料、会议和行动串在同一条主线上。', actionButton('新建项目', 'create', 'plus', 'primary', 'data-collection="projects"')) +
+      `<div class="toolbar"><div class="tabs" aria-label="按阶段筛选">${['全部', ...STAGES].map(stage => `<button type="button" class="tab${state.projectStage === stage ? ' active' : ''}" data-action="project-stage" data-value="${stage}">${stage}</button>`).join('')}</div>${searchInput('project-search', '搜索项目、行业、负责人', state.projectQuery)}</div>
+      <div class="project-grid">${projects.map(project => `<article class="panel project-card${String(project.id) === String(state.projectId) ? ' selected' : ''}"><div class="row"><span class="project-symbol">${icon('projects')}</span><div class="spacer"><button type="button" class="project-title" data-action="project-detail" data-id="${esc(project.id)}">${esc(project.name)}</button><p class="project-sector">${esc(project.sector || '待完善行业')} · ${esc(project.owner || '待分配负责人')}</p></div>${iconButton('编辑项目', 'edit', 'edit', `data-collection="projects" data-id="${esc(project.id)}"`)}</div><p class="project-thesis">${esc(project.thesis || '尚未记录核心判断。编辑项目，写下你的研究起点。')}</p><div class="row wrap">${badge(project.stage || '线索')}${badge(`${project.priority || '中'}优先级`, project.priority === '高' ? 'red' : 'gray')}${String(project.tags || '').split(/[，,]/).filter(Boolean).slice(0, 2).map(tag => badge(excerpt(tag.trim(), 18), 'gray')).join('')}</div><div class="project-bottom"><div class="project-counts"><span>${icon('file')}${list('documents').filter(item => String(item.project_id) === String(project.id)).length}</span><span>${icon('tasks')}${list('tasks').filter(item => String(item.project_id) === String(project.id) && item.status !== '完成').length} 待办</span></div><button type="button" class="text-button tiny" data-action="project-detail" data-id="${esc(project.id)}">项目详情 ${icon('arrow')}</button></div></article>`).join('')}</div>
+      ${!projects.length ? `<section class="panel">${empty('projects', list('projects').length ? '没有符合筛选的项目' : '让每个项目有一条清晰的推进线', list('projects').length ? '试试其他阶段或搜索词。' : '创建项目后，资料、任务、会议与交付都可以归集到这里。', actionButton('新建项目', 'create', 'plus', 'primary', 'data-collection="projects"'))}</section>` : ''}
+      ${selected ? renderProjectDetail(selected) : ''}`;
+  }
+  function renderProjectDetail(project) {
+    const related = collection => list(collection).filter(item => String(item.project_id) === String(project.id));
+    return `<section class="panel project-detail" id="project-detail"><div class="detail-header"><div><div class="eyebrow">PROJECT BRIEF</div><h2>${esc(project.name)}</h2><div class="row wrap mt-12">${badge(project.stage)}${badge(project.priority + '优先级', project.priority === '高' ? 'red' : 'gray')}<span class="small muted">${esc(project.valuation || '估值待补充')}</span></div></div><div class="row">${actionButton('编辑', 'edit', 'edit', 'small', `data-collection="projects" data-id="${esc(project.id)}"`)}${actionButton('生成项目简报', 'project-deliverable', 'deliverables', 'small soft', `data-id="${esc(project.id)}"`)}${iconButton('关闭项目详情', 'project-close', 'close')}</div></div><div class="detail-columns"><div><div class="detail-label">核心判断</div><div class="detail-text">${esc(project.thesis || '尚未记录')}</div></div><div><div class="detail-label">下一步行动</div><div class="detail-text">${esc(project.next_step || '尚未记录')}</div></div></div><div class="related-grid">${[
+      ['tasks', '关联任务', 'tasks'], ['documents', '证据材料', 'research'], ['meetings', '会议记录', 'meetings'], ['notes', '研究结论', 'research'], ['deliverables', '交付成果', 'deliverables']
+    ].map(([collection, label, page]) => `<div class="related-box"><div class="row between"><h3>${label} <span class="count-pill">${related(collection).length}</span></h3>${iconButton(`新建${LABELS[collection]}`, 'project-create', 'plus', `data-collection="${collection}" data-project-id="${esc(project.id)}"`)}</div>${related(collection).slice(0, 4).map(item => `<button type="button" class="related-link" data-action="open-record" data-collection="${collection}" data-id="${esc(item.id)}">${esc(item.title)}</button>`).join('') || '<p class="tiny muted">尚无关联记录</p>'}${related(collection).length > 4 ? `<button type="button" class="text-button tiny mt-12" data-action="project-go" data-page-target="${page}" data-id="${esc(project.id)}">查看全部</button>` : ''}</div>`).join('')}</div></section>`;
+  }
+
+  function renderTasks() {
+    const state = view(); const query = state.taskQuery.toLowerCase();
+    const tasks = list('tasks').filter(item => (!state.taskProject || String(item.project_id) === state.taskProject) && (!state.taskPriority || item.priority === state.taskPriority) && `${item.title} ${item.description} ${item.owner}`.toLowerCase().includes(query)).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'));
+    return heading('任务中心', 'MAKE IT HAPPEN', '把下一步变得具体。每一项行动，都有状态、负责人和时间。', actionButton('新建任务', 'create', 'plus', 'primary', 'data-collection="tasks"')) +
+      `<div class="toolbar"><div class="toolbar-group">${projectFilter('task-project', state.taskProject)}<select id="task-priority" class="compact-select" aria-label="按优先级筛选"><option value="">全部优先级</option>${options(PRIORITIES, state.taskPriority)}</select></div>${searchInput('task-search', '搜索任务、负责人', state.taskQuery)}</div>
+      <div class="kanban">${STATUSES.map(status => { const items = tasks.filter(task => task.status === status); return `<section class="kanban-column"><header class="kanban-head"><span><span class="kanban-dot"></span>${status} <span class="count-pill">${items.length}</span></span>${iconButton(`新建${status}任务`, 'task-new-status', 'plus', `data-status="${status}"`)}</header>${items.length ? items.map(task => `<article class="task-card${String(task.id) === String(state.highlightTask) ? ' highlight' : ''}" id="task-${esc(task.id)}"><div class="row between">${badge(task.priority || '中', task.priority === '高' ? 'red' : task.priority === '中' ? 'amber' : 'gray')}${iconButton('编辑任务', 'edit', 'edit', `data-collection="tasks" data-id="${esc(task.id)}"`)}</div><button type="button" class="task-card-title" data-action="edit" data-collection="tasks" data-id="${esc(task.id)}">${esc(task.title)}</button>${task.description ? `<p class="task-card-description">${esc(task.description)}</p>` : ''}<div class="task-meta"><span>${esc(projectName(task.project_id))}</span>${task.meeting_id ? '<span>· 来自会议</span>' : ''}</div><div class="task-card-footer"><span><span${overdue(task) ? ' class="color-red"' : ''}>${task.due ? `${overdue(task) ? '逾期 ' : ''}${esc(dateLabel(task.due))}` : '无到期日'}</span> · ${esc(task.owner || '未分配')}</span><select class="status-select" data-task-status="${esc(task.id)}" aria-label="${esc(task.title)}的状态">${options(STATUSES, status)}</select></div></article>`).join('') : empty(status === '完成' ? 'circleCheck' : 'tasks', status === '完成' ? '完成的事情会留在这里' : '当前没有任务', status === '待办' ? '点击上方加号，安排下一步。' : '可从其他列调整任务状态。', '', true)}</section>`; }).join('')}</div>`;
+  }
+
+  function filteredSources() {
+    const state = view(); const query = state.sourceQuery.toLowerCase();
+    return list('documents').filter(doc => (!state.researchProject || String(doc.project_id) === state.researchProject) && `${doc.title} ${doc.category} ${doc.filename}`.toLowerCase().includes(query));
+  }
+  function renderResearch() {
+    const state = view(); const sources = filteredSources();
+    const selected = list('documents').filter(doc => state.selectedSources.has(String(doc.id)));
+    const notes = list('notes').filter(note => !state.researchProject || String(note.project_id) === state.researchProject);
+    const memorySelected = selected.some(doc => doc.kind === 'memory');
+    return heading('研究工作台', 'EVIDENCE BEFORE OPINION', '先选材料，再提问题。每一条回答，都可以回到原文。', actionButton('新建研究结论', 'create', 'plus', '', 'data-collection="notes"') + actionButton('导入材料', 'upload', 'upload', 'primary', app.uploadBusy ? 'disabled' : '')) +
+      `<div class="toolbar"><div class="toolbar-group">${projectFilter('research-project', state.researchProject)}<span class="small muted">${list('documents').length} 份可用资料 · ${notes.length} 条研究结论</span></div></div>
+      ${app.uploadBusy ? '<div class="file-progress"><span class="spinner"></span>正在解析并导入文件，请稍候…</div>' : ''}
+      <div class="research-layout"><section class="panel source-panel">${panelTitle('证据材料', 'file', `<span class="count-pill">${sources.length}</span>`)}<div class="panel-body" style="padding:0 16px 13px">${searchInput('source-search', '搜索材料标题', state.sourceQuery)}</div><div class="sources-toolbar"><label><input type="checkbox" id="source-select-all" ${sources.length && sources.every(doc => state.selectedSources.has(String(doc.id))) ? 'checked' : ''} ${!sources.length ? 'disabled' : ''}>选中筛选结果</label><span>已选 ${selected.length} 份</span></div><div class="source-list">${sources.length ? sources.map(doc => `<div class="source-row${state.selectedSources.has(String(doc.id)) ? ' selected' : ''}"><input type="checkbox" data-source-id="${esc(doc.id)}" aria-label="选择材料：${esc(doc.title)}" ${state.selectedSources.has(String(doc.id)) ? 'checked' : ''}><div class="source-info"><button type="button" class="source-name" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><div class="source-meta"><span>${doc.kind === 'memory' ? '记忆 · 仅本地' : esc(doc.category || '研究材料')}</span><span>${doc.page_count ? `${esc(doc.page_count)} 页` : esc(doc.filename?.split('.').pop()?.toUpperCase() || '纯文本')}</span></div></div></div>`).join('') : empty('file', '还没有证据材料', '导入 TXT / MD / PDF / DOCX，或直接粘贴原文。扫描 PDF 暂不支持 OCR。', '', true)}</div><div class="source-footer">${actionButton('粘贴原文', 'create', 'plus', 'small', 'data-collection="documents"')}${actionButton('导入文件', 'upload', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}</div></section>
+      <div class="stack"><section class="panel question-panel"><div class="question-heading"><span class="question-icon">${icon('research')}</span><div><h2>围绕选定证据，提出你的问题</h2><small>本地引擎为确定性检索与原文摘录，不是大模型。</small></div></div><form id="ask-form"><div class="question-box"><label for="question-input" class="sr-only">研究问题</label><textarea id="question-input" name="question" required maxlength="8000" placeholder="例如：这些材料如何描述收入增长的主要驱动？有哪些信息尚待核实？" ${state.asking ? 'disabled' : ''}>${esc(state.question)}</textarea><div class="question-bottom"><select id="ask-mode" aria-label="回答引擎" ${state.asking ? 'disabled' : ''}><option value="local"${selectedAttr('local', state.askMode)}>本地检索 · 无外发</option><option value="model"${selectedAttr('model', state.askMode)}>可选模型 · 需本次授权</option></select><button type="submit" class="button primary" ${state.asking ? 'disabled' : ''}>${state.asking ? '<span class="spinner"></span>正在查阅…' : icon('arrow') + '查阅选定材料'}</button></div></div><div class="source-scope"><span>本次范围：</span>${selected.length ? selected.map(doc => `<span class="tag ${doc.kind === 'memory' ? 'amber' : 'green'}">${esc(doc.title)}</span>`).join('') : '<span>请先在左侧明确选择材料，不会默认检索或发送全库。</span>'}</div>
+      ${state.askMode === 'model' ? `<div class="mt-12">${banner('外部模型 · 仅发送本次问题和选定研究材料', !app.boot?.ai?.configured ? '尚未配置模型连接，请先到设置填写兼容接口。' : `当前模型：${app.boot.ai.model || '已配置'}。你可在设置查看目标服务地址。`, 'amber', 'external')}</div>${memorySelected ? `<div class="mt-12">${banner('', '选中范围包含个人记忆。记忆禁止外发，只能本地检索；请改为本地模式，或取消记忆并使用单独脱敏的研究资料。', 'error', 'lock')}</div>` : ''}<label class="consent"><input type="checkbox" id="allow-external" ${memorySelected ? 'disabled' : ''}><span>我确认选中的研究资料已脱敏，允许<strong>仅本次请求</strong>将上方可见的选中范围和问题发送到已配置的外部模型。不发送未选资料与个人记忆。</span></label>` : ''}</form></section>
+      ${state.answers.length ? state.answers.map((answer, index) => renderAnswer(answer, index)).join('') : `<section class="panel">${empty('quote', '从有出处的回答开始', '选中一份或多份资料。本地检索会给出原文摘录，点击引用可定位页码或段落；没有证据时不会补写事实。', '', true)}</section>`}
+      <section class="panel">${panelTitle('研究结论', 'book', actionButton('新建结论', 'create', 'plus', 'small ghost', 'data-collection="notes"'))}${notes.length ? notes.map(note => `<article class="note-item"><div class="row between"><h3 class="notes-title">${esc(note.title)}</h3>${badge(note.status)}</div><p class="note-body">${esc(note.body)}</p>${note.source_quote ? `<div class="note-quote">${esc(note.source_quote)}</div>` : ''}<div class="row wrap"><span class="tiny muted">${esc(projectName(note.project_id))}</span><span class="spacer"></span>${note.document_id ? actionButton('查看证据', 'note-source', 'quote', 'small ghost', `data-id="${esc(note.id)}"`) : ''}${actionButton('编辑 / 核实', 'edit', 'edit', 'small ghost', `data-collection="notes" data-id="${esc(note.id)}"`)}${actionButton('转为交付', 'note-deliverable', 'deliverables', 'small soft', `data-id="${esc(note.id)}"`)}</div></article>`).join('') : empty('book', '先留存结论，再持续核实', '问答可保存为研究结论，也可手动记录判断、证据与核实状态。', '', true)}</section></div></div>`;
+  }
+  function renderAnswer(answer, index) {
+    const citations = Array.isArray(answer.citations) ? answer.citations : [];
+    return `<article class="panel answer-card"><div class="answer-heading"><span>${answer.mode === 'model' ? '外部模型回答 · 需自行核验' : '本地证据摘录 · 非大模型'}</span><span>${Number.isFinite(Number(answer.elapsed_ms)) ? `${number(answer.elapsed_ms)} ms` : ''}</span></div><div class="question-history">${esc(answer.question)}</div><div class="answer-text">${esc(answer.answer)}</div>${answer.warning ? `<div class="mt-12">${banner('', answer.warning, 'amber', 'info')}</div>` : ''}<div class="citation-grid">${citations.map((citation, citationIndex) => `<button type="button" class="citation" data-action="citation" data-answer="${index}" data-citation="${citationIndex}"><span class="citation-number">${citationIndex + 1}</span><div><strong>${esc(citation.title)} · ${citation.page != null ? `第 ${esc(citation.page)} 页 · ` : ''}第 ${esc(citation.ordinal ?? citationIndex + 1)} 段</strong><p>${esc(citation.quote)}</p></div></button>`).join('')}</div><div class="answer-footer"><span class="tiny muted spacer">${citations.length} 处可定位引用</span>${actionButton('保存为研究结论', 'answer-note', 'book', 'small soft', `data-index="${index}"`)}</div></article>`;
+  }
+  async function askQuestion() {
+    const state = view(); if (state.asking) return;
+    const question = $('#question-input').value.trim(); state.question = question;
+    if (!question) { notify('请先输入一个研究问题。', true); return; }
+    const ids = [...state.selectedSources];
+    if (!ids.length) { notify('请先明确选中至少一份资料。', true); return; }
+    const mode = $('#ask-mode').value;
+    const allowExternal = mode === 'model' && Boolean($('#allow-external')?.checked);
+    if (mode === 'model') {
+      if (ids.some(id => record('documents', id)?.kind === 'memory')) { notify('个人记忆禁止外发，请切换本地检索或取消记忆来源。', true); return; }
+      if (!app.boot?.ai?.configured) { notify('请先在设置中配置可选模型。', true); return; }
+      if (!allowExternal) { notify('外部模型需要你勾选“仅本次请求”外发授权。', true); return; }
+    }
+    const projectId = state.researchProject || '';
+    state.asking = true; render();
+    try {
+      const response = await api('/ask', { body: { question, project_id: projectId, document_ids: ids, mode, allow_external: allowExternal } });
+      state.answers.unshift({ ...response, question, project_id: projectId }); state.answers = state.answers.slice(0, 8);
+    } catch (error) { showError(error); }
+    finally { state.asking = false; if (view() === state && app.page === 'research') render(); }
+  }
+  async function uploadFiles(files) {
+    if (app.uploadBusy || !files.length) return;
+    app.uploadBusy = true; const state = view(); const projectId = state.researchProject || ''; const epoch = app.epoch;
+    if (app.page === 'research') render();
+    let imported = 0; let failed = 0;
+    try {
+      for (const file of files) {
+        if (epoch !== app.epoch) throw new StaleRequestError();
+        if (!/\.(txt|md|pdf|docx)$/i.test(file.name)) { notify(`“${file.name}”格式不支持，请使用 TXT / MD / PDF / DOCX。`, true); failed++; continue; }
+        if (file.size > 12 * 1024 * 1024) { notify(`“${file.name}”超过 12 MB，未导入。`, true); failed++; continue; }
+        try {
+          const base64 = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(new Error(`无法读取“${file.name}”。`)); reader.readAsDataURL(file); });
+          const doc = await api('/upload', { body: { name: file.name, base64, project_id: projectId, kind: 'research' } });
+          if (doc.id) state.selectedSources.add(String(doc.id)); imported++;
+        } catch (error) { if (error.name === 'StaleRequestError') throw error; failed++; showError(error); }
+      }
+      if (imported) { await refreshData(); notify(`已导入 ${imported} 份资料${failed ? `，${failed} 份未导入` : ''}。`); }
+    } catch (error) { showError(error); }
+    finally { app.uploadBusy = false; $('#upload-input').value = ''; if (epoch === app.epoch) render(); }
+  }
+  async function openDocument(id, citation = null) {
+    const dialog = $('#document-dialog');
+    dialog.innerHTML = `<div class="document-top"><div><h2 id="document-title">正在载入原文</h2></div><button type="button" class="icon-button" data-close-dialog="document-dialog" aria-label="关闭原文">${icon('close')}</button></div>${loading('正在从本地读取材料…')}`;
+    if (!dialog.open) dialog.showModal();
+    const ticket = String(id) + ':' + Date.now(); dialog.dataset.ticket = ticket;
+    try {
+      const doc = await api(`/documents/${encodeURIComponent(id)}`);
+      if (!dialog.open || dialog.dataset.ticket !== ticket) return;
+      const chunks = Array.isArray(doc.chunks) ? doc.chunks : [];
+      let targetIndex = -1;
+      if (citation) {
+        targetIndex = chunks.findIndex(chunk => citation.id && String(chunk.id) === String(citation.id));
+        if (targetIndex < 0 && citation.ordinal != null) targetIndex = chunks.findIndex(chunk => String(chunk.ordinal) === String(citation.ordinal) && (citation.page == null || String(chunk.page) === String(citation.page)));
+        if (targetIndex < 0 && citation.quote) targetIndex = chunks.findIndex(chunk => chunk.text && String(chunk.text).includes(String(citation.quote).slice(0, 60)));
+      }
+      dialog.innerHTML = `<div class="document-top"><div><h2 id="document-title">${esc(doc.title)}</h2><div class="document-metadata">${badge(doc.kind === 'memory' ? '只读记忆副本' : '研究材料', doc.kind === 'memory' ? 'amber' : 'green')}<span>${esc(projectName(doc.project_id))}</span><span>${chunks.length} 段${doc.page_count ? ` · ${esc(doc.page_count)} 页` : ''}</span><span>${esc(dateLabel(doc.updated_at, true))} 更新</span></div></div><div class="row">${doc.kind !== 'memory' ? iconButton('编辑原文', 'document-edit', 'edit', `data-id="${esc(doc.id)}"`) : ''}${iconButton(doc.kind === 'memory' ? '删除导入副本' : '删除材料', 'document-delete', 'trash', `data-id="${esc(doc.id)}"`, 'danger')}<button type="button" class="icon-button" data-close-dialog="document-dialog" aria-label="关闭原文">${icon('close')}</button></div></div><div class="document-reader"><div class="document-origin">来源：${esc(doc.source_ref || doc.filename || '手动创建')}<br>分类：${esc(doc.category || '未分类')}${doc.hash ? `<br>内容指纹：${esc(doc.hash)}` : ''}${doc.kind === 'memory' ? '<br>这是只读导入副本，删除副本不会修改来源文件。' : ''}</div>${citation && targetIndex < 0 ? `<div class="mb-15">${banner('', '原文可能已被编辑，未能匹配原引用段落。请结合下方全文重新核实。', 'amber', 'warning')}</div>` : ''}${chunks.length ? chunks.map((chunk, index) => `<section class="document-chunk${index === targetIndex ? ' highlight' : ''}" id="document-chunk-${index}" tabindex="-1"><div class="chunk-label">${chunk.page != null ? `<span>第 ${esc(chunk.page)} 页</span>` : ''}<span>第 ${esc(chunk.ordinal ?? index + 1)} 段</span>${index === targetIndex ? '<span>当前引用</span>' : ''}</div><p>${esc(chunk.text)}</p></section>`).join('') : `<section class="document-chunk"><p>${esc(doc.content || '此材料没有可显示的原文。')}</p></section>`}</div>`;
+      if (targetIndex >= 0) requestAnimationFrame(() => { const chunk = $(`#document-chunk-${targetIndex}`, dialog); chunk?.scrollIntoView({ block: 'center', behavior: 'instant' }); chunk?.focus({ preventScroll: true }); });
+    } catch (error) {
+      if (dialog.dataset.ticket === ticket && dialog.open) dialog.innerHTML = `<div class="document-top"><h2 id="document-title">原文读取失败</h2><button type="button" class="icon-button" data-close-dialog="document-dialog" aria-label="关闭">${icon('close')}</button></div><div class="document-reader">${banner('', error.message, 'error', 'warning')}</div>`;
+    }
+  }
+
+  function meetingSelection() {
+    const state = view(); const meetings = list('meetings').filter(meeting => !state.meetingProject || String(meeting.project_id) === state.meetingProject).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    if (!meetings.some(meeting => String(meeting.id) === String(state.meetingId))) state.meetingId = meetings[0]?.id || '';
+    return { meetings, meeting: meetings.find(item => String(item.id) === String(state.meetingId)) };
+  }
+  function renderMeetings() {
+    const state = view(); const { meetings, meeting } = meetingSelection();
+    return heading('会议中心', 'FROM CONVERSATION TO ACTION', '保留讨论原文，编辑会议纪要，逐项确认后再创建任务。', actionButton('新建会议', 'create', 'plus', 'primary', 'data-collection="meetings"')) +
+      `<div class="toolbar"><div class="toolbar-group">${projectFilter('meeting-project', state.meetingProject)}<span class="small muted">${meetings.length} 场会议</span></div></div>
+      <div class="split-layout"><section class="panel">${panelTitle('会议记录', 'meetings')}<div class="record-list">${meetings.length ? meetings.map(item => `<button type="button" class="record-item${String(item.id) === String(state.meetingId) ? ' active' : ''}" data-action="select-meeting" data-id="${esc(item.id)}"><h3>${esc(item.title)}</h3><p>${esc(projectName(item.project_id))}</p><span class="record-date">${esc(item.date || '日期待补充')} · ${esc(item.participants || '参会人待补充')}</span></button>`).join('') : empty('meetings', '尚无会议记录', '粘贴逐字稿即可开始。', '', true)}</div></section>
+      <div>${meeting ? renderMeetingDetail(meeting) : `<section class="panel">${empty('meetings', '让会议形成可跟进的行动', '新建会议并粘贴逐字稿。规则引擎生成的是可编辑草稿，不会自动创建任务或作出承诺。', actionButton('记录第一场会议', 'create', 'plus', 'primary', 'data-collection="meetings"'))}</section>`}</div></div>`;
+  }
+  function renderMeetingDetail(meeting) {
+    const draft = view().drafts.get(String(meeting.id));
+    const actions = draft?.actions || [];
+    const relatedTasks = list('tasks').filter(task => String(task.meeting_id) === String(meeting.id));
+    return `<section class="panel"><div class="meeting-header"><div><h2>${esc(meeting.title)}</h2><div class="meeting-meta"><span>${esc(meeting.date || '未设置日期')}</span><span>·</span><span>${esc(projectName(meeting.project_id))}</span><span>${esc(meeting.participants || '')}</span></div></div><div class="row">${iconButton('编辑会议与逐字稿', 'edit', 'edit', `data-collection="meetings" data-id="${esc(meeting.id)}"`)}${iconButton('删除会议', 'delete', 'trash', `data-collection="meetings" data-id="${esc(meeting.id)}"`, 'danger')}</div></div><div class="meeting-body"><details class="transcript-details"${meeting.transcript ? '' : ' open'}><summary>查看逐字稿 · ${String(meeting.transcript || '').length} 字</summary><div class="transcript-text">${esc(meeting.transcript || '尚未录入逐字稿，请编辑会议并粘贴原文。')}</div></details>
+      ${banner('规则摘要 · 非大模型', '基于逐字稿的确定性规则生成草稿，可能遗漏或误判。请核对原文、编辑纪要，并逐条确认行动项。', '', 'info')}
+      <div class="row wrap mt-18">${actionButton(draft ? '重新生成规则草稿' : '生成规则摘要与候选行动', 'meeting-draft', 'spark', 'soft', `data-id="${esc(meeting.id)}" ${!meeting.transcript?.trim() ? 'disabled title="请先编辑会议并粘贴逐字稿"' : ''}`)}<span class="tiny muted">不会自动创建任务</span></div>
+      ${draft?.warning ? `<p class="inline-note mt-12">${esc(draft.warning)}</p>` : ''}
+      <form id="meeting-summary-form" data-id="${esc(meeting.id)}"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="先生成规则草稿，或直接编写你的纪要。">${esc(draft?.summary ?? meeting.summary ?? '')}</textarea></div><div class="row wrap"><button type="submit" class="button primary small">${icon('check')}保存纪要</button>${actionButton('转为会议交付', 'meeting-deliverable', 'deliverables', 'small', `data-id="${esc(meeting.id)}"`)}<span class="tiny muted" id="meeting-save-state">${draft && draft.summary !== meeting.summary ? '草稿尚未保存' : '纪要已保存至本地'}</span></div></form>
+      ${draft ? `<div class="subsection-title"><h3>候选行动项 <span class="count-pill">${actions.length}</span></h3><span class="tiny muted">默认不勾选，逐项核实后创建</span></div>${actions.length ? `<form id="meeting-actions-form" data-id="${esc(meeting.id)}">${actions.map((action, index) => {
+        const created = Boolean(action.created || relatedTasks.some(task => task.title === action.title));
+        return `<div class="action-candidate${created ? ' created' : ''}"><input type="checkbox" name="confirmed" value="${index}" aria-label="确认行动项 ${index + 1}" ${created ? 'disabled checked' : ''}><div class="candidate-fields"><label class="sr-only" for="action-title-${index}">行动项 ${index + 1} 标题</label><input id="action-title-${index}" name="title-${index}" class="candidate-title" value="${esc(action.title)}" ${created ? 'disabled' : ''}><div class="candidate-meta"><label>负责人<input name="owner-${index}" value="${esc(action.owner)}" ${created ? 'disabled' : ''}></label><label>到期日期<input name="due-${index}" type="date" value="${esc(/^\d{4}-\d{2}-\d{2}$/.test(action.due || '') ? action.due : '')}" ${created ? 'disabled' : ''}></label></div>${action.source_quote ? `<p class="candidate-quote">原文：“${esc(action.source_quote)}”</p>` : ''}${created ? '<span class="tag green mt-12">已关联任务，不重复创建</span>' : ''}</div></div>`;
+      }).join('')}<div class="row wrap mt-18"><button type="submit" class="button primary">${icon('tasks')}确认选中并建任务</button><span class="tiny muted">仅创建你勾选的行动项</span></div></form>` : empty('circleCheck', '没有识别到明确行动项', '可直接新建任务，也可以编辑原文后重新生成。规则识别不等于完整会议理解。', actionButton('手动新建任务', 'meeting-new-task', 'plus', 'small', `data-id="${esc(meeting.id)}"`), true)}` : ''}
+      ${relatedTasks.length ? `<div class="subsection-title"><h3>会议关联任务 <span class="count-pill">${relatedTasks.length}</span></h3></div>${relatedTasks.map(task => `<div class="task-line"><span class="tag ${task.status === '完成' ? 'green' : 'blue'}">${esc(task.status)}</span><button type="button" class="task-title" data-action="edit" data-collection="tasks" data-id="${esc(task.id)}">${esc(task.title)}</button><span class="task-meta">${esc(task.owner || '未分配')}</span></div>`).join('')}` : ''}</div></section>`;
+  }
+  async function generateMeetingDraft(id, button) {
+    const meeting = record('meetings', id);
+    if (!meeting?.transcript?.trim()) { notify('请先录入会议逐字稿。', true); return; }
+    if (view().drafts.has(String(id)) && !await confirmDialog('重新生成规则草稿？', '这会替换页面中尚未保存的规则草稿及候选行动编辑，不影响已经创建的任务。', '重新生成')) return;
+    await withBusy(button, '正在生成规则草稿…', async () => {
+      const draft = await api('/meeting-draft', { body: { transcript: meeting.transcript } });
+      view().drafts.set(String(id), { ...draft, actions: Array.isArray(draft.actions) ? draft.actions.map(action => ({ ...action })) : [] });
+      render(); notify('规则草稿已生成。请核对、编辑纪要并逐项确认行动。');
+    });
+  }
+  async function saveMeetingSummary(form) {
+    const id = form.dataset.id; const summary = $('#meeting-summary', form).value.trim();
+    await withBusy($('button[type="submit"]', form), '保存中…', async () => {
+      await api(`/meetings/${encodeURIComponent(id)}`, { method: 'PATCH', body: { summary } });
+      const draft = view().drafts.get(String(id)); if (draft) draft.summary = summary;
+      await refreshData(); render(); notify('会议纪要已保存。');
+    });
+  }
+  async function createMeetingTasks(form) {
+    const id = form.dataset.id; const meeting = record('meetings', id); const draft = view().drafts.get(String(id));
+    if (!meeting || !draft) return;
+    const formData = new FormData(form); const indexes = formData.getAll('confirmed').map(Number);
+    if (!indexes.length) { notify('请先逐项核实并勾选需要创建的行动项。', true); return; }
+    const pending = indexes.map(index => ({ index, title: String(formData.get(`title-${index}`) || '').trim(), owner: String(formData.get(`owner-${index}`) || '').trim(), due: String(formData.get(`due-${index}`) || ''), action: draft.actions[index] })).filter(item => item.action && !item.action.created);
+    if (pending.some(item => !item.title)) { notify('已选行动项的标题不能为空。', true); return; }
+    if (!pending.length) { notify('这些行动项已经创建过任务。'); return; }
+    await withBusy($('button[type="submit"]', form), '正在逐项创建…', async () => {
+      let count = 0; let failure = null;
+      for (const item of pending) {
+        try {
+          await api('/tasks', { body: { title: item.title, owner: item.owner, due: item.due, description: `会议行动项（已人工确认）\n\n原文：${item.action.source_quote || '未提供摘录'}`, project_id: meeting.project_id || '', meeting_id: meeting.id, status: '待办', priority: '中' } });
+          Object.assign(item.action, { title: item.title, owner: item.owner, due: item.due, created: true }); count++;
+        } catch (error) { failure = error; break; }
+      }
+      await refreshData(); render();
+      if (count) notify(`已将 ${count} 个已确认行动项创建为任务。`);
+      if (failure) throw failure;
+    });
+  }
+
+  function renderMemory() {
+    const state = view(); const memories = list('documents').filter(doc => doc.kind === 'memory');
+    const categories = ['全部', ...new Set(['偏好', '方法', '会话', ...memories.map(doc => doc.category).filter(Boolean)])];
+    const query = state.memoryQuery.toLowerCase();
+    const filtered = memories.filter(doc => (state.memoryCategory === '全部' || doc.category === state.memoryCategory) && `${doc.title} ${doc.source_ref} ${doc.category}`.toLowerCase().includes(query));
+    return heading('知识与记忆', 'YOUR KNOWLEDGE, CONNECTED', '把积累接入当下的工作，而不是再造一个信息孤岛。', actionButton('扫描当前记忆', 'memory-scan', 'refresh', 'primary')) +
+      `<div class="section-gap">${banner('只读导入 · 不改动原文件 · 记忆禁止外发', app.workspace === 'personal' ? '默认不扫描任何目录；仅扫描 WORKOS_MEMORY_ROOT 显式指定的 Markdown 文件夹，跳过凭证、机器环境与设备配置。保留来源、更新时间和内容指纹；已有副本按内容去重。记忆只允许本地检索。' : '当前展示合成记忆。扫描与导入真实记忆仅在个人工作区可用，不会将真实文件放进演示库。', '', 'lock')}</div>
+      <div class="toolbar"><div class="tabs" aria-label="按记忆分类筛选">${categories.map(category => `<button type="button" class="tab${state.memoryCategory === category ? ' active' : ''}" data-action="memory-category" data-value="${esc(category)}">${esc(category)}</button>`).join('')}</div>${searchInput('memory-search', '搜索标题、来源、分类', state.memoryQuery)}</div><div class="memory-grid">${filtered.map(doc => `<article class="panel memory-card"><div class="row between"><span class="quick-icon">${icon('memory')}</span>${badge(doc.category || '未分类', 'green')}</div><button type="button" class="memory-title mt-12" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><p class="memory-source">${esc(doc.source_ref || '合成演示来源')}</p><div class="row between"><span class="tiny muted">只读导入副本</span><button type="button" class="text-button tiny" data-action="document" data-id="${esc(doc.id)}">查看原文 ${icon('arrow')}</button></div><div class="memory-footer"><span>导入 / 更新 ${esc(dateLabel(doc.updated_at || doc.created_at, true))}</span>${iconButton('删除导入副本', 'delete', 'trash', `data-collection="documents" data-id="${esc(doc.id)}"`, 'danger')}</div></article>`).join('')}</div>${!filtered.length ? `<section class="panel">${empty('memory', memories.length ? '没有符合筛选的记忆' : '连接你已经积累的知识', memories.length ? '可调整分类或搜索词。全文内容可通过 Ctrl+K 搜索。' : '扫描只读取允许的文件列表。你可以查看路径、逐项选择后导入，原文件保持不变。', actionButton('扫描可导入记忆', 'memory-scan', 'refresh', 'primary'))}</section>` : ''}`;
+  }
+  async function scanMemory(button) {
+    if (app.workspace !== 'personal') { notify('真实记忆仅能导入个人工作区。请先切换到个人工作区。', true); return; }
+    await withBusy(button, '正在扫描…', async () => {
+      const scan = await api('/memory/scan'); const files = Array.isArray(scan.files) ? scan.files : [];
+      const skipped = Array.isArray(scan.skipped) ? scan.skipped.length : Number(scan.skipped) || 0;
+      const body = `${banner('扫描只返回文件列表，不发送任何内容', `${files.length} 个文件可导入，${skipped} 个项目已跳过。请检查来源并选择要导入的文件。`, '', 'lock')}${files.length ? `<div class="row mt-18"><input type="checkbox" id="memory-select-all"><label for="memory-select-all" class="small muted">选择列表中的全部文件</label></div><div class="scan-list">${files.map(file => `<label class="scan-item"><input type="checkbox" name="paths" value="${esc(file.path)}"><span class="scan-copy"><strong>${esc(file.title || file.path)}</strong><small>${esc(file.path)}</small><small>${esc(file.category || '未分类')} · ${number(Number(file.size || 0) / 1024)} KB · ${esc(dateLabel(file.modified, true))}</small></span></label>`).join('')}</div>` : empty('memory', scan.root_available ? '未发现可导入文件' : '当前记忆根目录不可用', '不会自动查找其他目录。请设置 WORKOS_MEMORY_ROOT 为你选择的文件夹绝对路径，再重启服务。', '', true)}<p class="inline-note mt-12">重复扫描不会反复创建相同记录；内容发生变化时更新导入副本。</p><div class="mb-15"></div>`;
+      const dialog = openModal('导入当前知识与记忆', body, async form => {
+        const paths = form.getAll('paths'); if (!paths.length) throw new Error('请至少选择一个允许导入的文件。');
+        const result = await api('/memory/import', { body: { paths } });
+        const count = value => Array.isArray(value) ? value.length : Number(value) || 0;
+        await refreshData(); render(); notify(`导入完成：新增 ${count(result.imported)}，更新 ${count(result.updated)}，未变化 ${count(result.unchanged)}，跳过 ${count(result.skipped)}。`);
+      }, { wide: true, submitText: '导入选中记忆', busyText: '正在导入…' });
+      if (!files.length) $('#modal-submit').disabled = true;
+      $('#memory-select-all', dialog)?.addEventListener('change', event => { $$('input[name="paths"]', dialog).forEach(input => { input.checked = event.target.checked; }); });
+    });
+  }
+
+  function renderFinance() {
+    const state = view(); const result = state.financeResult;
+    return heading('回报测算', 'ASSUMPTIONS, NOT PROMISES', '所有数字由本地代码计算。展示假设、公式与边界，不让模型代算。', actionButton('保存测算简报', 'finance-deliverable', 'deliverables', '', !result || state.financeDirty ? 'disabled title="请先用当前假设完成测算"' : '')) +
+      `<div class="section-gap">${banner('简化权益回报模型 · 非完整 LBO', '单位：人民币百万元。不包含税务、营运资本明细、交易费用及完整债务契约；情景和敏感性不是收益承诺。现金流、IRR / MOIC 的定义请查看下方公式。', 'amber', 'info')}</div>
+      <div class="finance-layout"><section class="panel assumption-panel"><h2>核心假设</h2><p>百分比在界面输入，提交时转换为小数。</p><form id="finance-form"><fieldset ${state.financePending ? 'disabled' : ''}><div class="assumption-fields">${FINANCE_FIELDS.map(([key, label, unit, min, max, step]) => `<div class="field"><label for="assumption-${key}">${label}</label><div class="input-unit"><input id="assumption-${key}" type="number" name="${key}" required min="${min}" max="${max}" step="${step}" value="${Number((state.finance[key] * (PERCENT_FIELDS.has(key) ? 100 : 1)).toFixed(6))}"><span>${unit}</span></div></div>`).join('')}</div><button type="submit" class="button primary full">${state.financePending ? '<span class="spinner"></span>正在计算…' : icon('finance') + '运行本地测算'}</button>${actionButton('恢复默认假设', 'finance-reset', 'refresh', 'ghost small full mt-12')}</fieldset><p class="inline-note mt-12" id="finance-dirty-note">仅假设数值按工作区保存在本机。${state.financeDirty ? '假设已改变，请重新计算。' : '修改后点击运行，更新右侧结果。'}</p></form></section><div class="stack">${state.financeError ? banner('测算未完成', state.financeError, 'error', 'warning') : ''}${result ? renderFinanceResult(result, state.financeDirty) : `<section class="panel">${state.financePending ? loading('正在计算现金流、IRR 与敏感性…') : empty('finance', '用一致的假设，检验不同情景', '输入核心假设并运行测算。结果来自本地计算接口，不展示模拟占位数字。')}</section>`}</div></div>`;
+  }
+  function renderFinanceResult(result, dirty) {
+    const rows = Array.isArray(result.base?.rows) ? result.base.rows : [];
+    const sensitivity = result.sensitivity || {};
+    let formulas = '';
+    if (Array.isArray(result.formulas)) formulas = result.formulas.map(value => `<p>${esc(typeof value === 'string' ? value : JSON.stringify(value))}</p>`).join('');
+    else if (result.formulas && typeof result.formulas === 'object') formulas = Object.entries(result.formulas).map(([key, value]) => `<p><strong>${esc(key)}</strong>：${esc(typeof value === 'string' ? value : JSON.stringify(value))}</p>`).join('');
+    else formulas = esc(result.formulas || '请以服务端返回的计算口径为准。');
+    return `${dirty ? banner('', '当前展示上一次已完成的测算。新假设尚未计算，不可直接保存为简报。', 'amber', 'warning') : ''}<div class="scenario-grid">${[['bear', '保守情景'], ['base', '基准情景'], ['bull', '乐观情景']].map(([key, label]) => `<section class="scenario-card ${key === 'base' ? 'base' : ''}"><div class="scenario-label">${label} · 股权 IRR</div><div class="scenario-irr">${percent(result[key]?.irr)}</div><div class="scenario-moic">MOIC <b>${number(result[key]?.moic)}×</b></div><div class="scenario-sub">${key === 'base' ? '基于当前已计算假设' : '按后端情景规则计算'}</div></section>`).join('')}</div>
+      <section class="panel">${panelTitle('基准现金流', 'finance', '<span class="tiny muted">人民币百万元</span>')}<div class="table-scroll"><table><thead><tr><th>年份</th><th class="number">收入</th><th class="number">EBITDA</th><th class="number">利息</th><th class="number">现金流</th><th class="number">债务</th></tr></thead><tbody>${rows.map(row => `<tr><td>第 ${esc(row.year)} 年</td><td class="number">${number(row.revenue)}</td><td class="number">${number(row.ebitda)}</td><td class="number">${number(row.interest)}</td><td class="number">${number(row.cash_flow)}</td><td class="number">${number(row.debt)}</td></tr>`).join('') || '<tr><td colspan="6">服务端未返回逐年现金流。</td></tr>'}</tbody></table></div><div class="finance-stats"><div><span>进入企业价值 EV</span><b>${number(result.base?.entry_ev)}</b></div><div><span>初始股权投入</span><b>${number(result.base?.entry_equity)}</b></div><div><span>退出股权价值</span><b>${number(result.base?.exit_equity)}</b></div></div></section>
+      <section class="panel">${panelTitle('敏感性 · 股权 IRR', 'grid', '<span class="tiny muted">增长率 × 退出倍数</span>')}<div class="table-scroll"><table class="sensitivity-table"><thead><tr><th>增长率 / 退出倍数</th>${(sensitivity.columns || []).map(value => `<th>${number(value)}×</th>`).join('')}</tr></thead><tbody>${(sensitivity.rows || []).map((growth, rowIndex) => `<tr><th>${percent(growth)}</th>${(sensitivity.values?.[rowIndex] || []).map(value => `<td class="heat-cell">${percent(value)}</td>`).join('')}</tr>`).join('') || '<tr><td>本次未返回敏感性数据。</td></tr>'}</tbody></table></div></section>
+      <section class="panel">${panelTitle('计算口径与简化边界', 'info')}<div class="panel-body"><div class="formula-list">${formulas}</div>${result.warning ? `<div class="mt-18">${banner('', typeof result.warning === 'string' ? result.warning : JSON.stringify(result.warning), 'amber', 'warning')}</div>` : ''}</div></section>`;
+  }
+  async function calculateFinance() {
+    const state = view(); if (state.financePending) return;
+    const form = $('#finance-form');
+    if (form && !form.reportValidity()) return;
+    if (form) {
+      const fields = new FormData(form);
+      for (const [key] of FINANCE_FIELDS) state.finance[key] = Number(fields.get(key)) / (PERCENT_FIELDS.has(key) ? 100 : 1);
+    }
+    state.financePending = true; state.financeError = ''; persistFinance(); render();
+    try { state.financeResult = await api('/model/calculate', { body: { ...state.finance } }); state.financeDirty = false; }
+    catch (error) { if (error.name !== 'StaleRequestError') state.financeError = error.message; }
+    finally { state.financePending = false; if (view() === state && app.page === 'finance') render(); }
+  }
+
+  function renderDeliverables() {
+    const state = view(); const items = [...list('deliverables')].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    if (!items.some(item => String(item.id) === String(state.deliverableId))) state.deliverableId = items[0]?.id || '';
+    const saved = record('deliverables', state.deliverableId);
+    const selected = saved && state.deliverableDirty && String(state.deliverableDraft?.id) === String(saved.id) ? { ...saved, ...state.deliverableDraft } : saved;
+    return heading('交付中心', 'TURN INSIGHT INTO OUTPUT', '把研究、会议与项目推进，整理成可以继续编辑的工作成果。', actionButton('备份工作区', 'backup', 'database') + actionButton('新建交付', 'create', 'plus', 'primary', 'data-collection="deliverables"')) +
+      `<div class="split-layout"><section class="panel">${panelTitle('我的交付', 'deliverables', `<span class="count-pill">${items.length}</span>`)}<div class="record-list">${items.length ? items.map(item => `<button type="button" class="record-item${String(item.id) === String(state.deliverableId) ? ' active' : ''}" data-action="select-deliverable" data-id="${esc(item.id)}"><h3>${esc(item.title)}</h3><p>${esc(item.kind)} · ${esc(projectName(item.project_id))}</p><span class="record-date">更新于 ${esc(dateLabel(item.updated_at, true))}</span></button>`).join('') : empty('deliverables', '还没有保存的交付', '研究结论、会议纪要和测算均可转成可编辑交付。', '', true)}</div></section><section class="panel">${selected ? `<form id="deliverable-form" class="deliverable-editor" data-id="${esc(selected.id)}"><label for="deliverable-title" class="sr-only">交付标题</label><input id="deliverable-title" name="title" class="editor-title" required maxlength="300" value="${esc(selected.title)}" placeholder="交付标题"><div class="editor-meta"><label class="sr-only" for="deliverable-kind">交付类型</label><select id="deliverable-kind" name="kind">${options(KINDS, selected.kind)}</select><label class="sr-only" for="deliverable-project">关联项目</label><select id="deliverable-project" name="project_id">${projectOptions(selected.project_id)}</select></div><label for="deliverable-body" class="sr-only">交付正文</label><textarea id="deliverable-body" name="body" class="editor-body" spellcheck="false" placeholder="开始写作，支持纯文本与 Markdown 内容。">${esc(selected.body)}</textarea><div class="editor-bar"><div class="row"><button type="submit" class="button primary">${icon('check')}保存修改</button><span class="save-state" id="deliverable-save-state">已保存 · ${String(selected.body || '').length} 字</span></div>${iconButton('删除此交付', 'delete', 'trash', `data-collection="deliverables" data-id="${esc(selected.id)}"`, 'danger')}</div><div class="separator"></div><div class="row wrap"><span class="tiny muted spacer">导出前会先保存当前编辑</span>${actionButton('Markdown', 'export', 'download', 'small', `data-id="${esc(selected.id)}" data-format="md"`)}${actionButton('可编辑 HTML', 'export', 'download', 'small', `data-id="${esc(selected.id)}" data-format="html"`)}${actionButton('Word', 'export', 'download', 'small', `data-id="${esc(selected.id)}" data-format="docx"`)}</div><p class="inline-note mt-12">HTML 为单文件交付，可编辑、添加批注并保存修改；导出文件中的修改不会自动回写本地工作区。正文不执行 HTML 或脚本。</p></form>` : empty('deliverables', '把一个清晰的判断，变成一份交付', '可从研究结论、会议纪要、项目详情和回报测算生成草稿，或从空白开始。所有正文都可继续编辑。', actionButton('新建交付', 'create', 'plus', 'primary', 'data-collection="deliverables"'))}</section></div>`;
+  }
+  async function saveDeliverable(form) {
+    const state = view();
+    if (state.deliverableSaving || !form?.reportValidity()) return false;
+    const payload = Object.fromEntries(new FormData(form).entries());
+    if (!String(payload.title).trim()) throw new Error('交付标题不能为空。');
+    payload.title = String(payload.title).trim(); state.deliverableSaving = true;
+    $$('input,textarea,select,button', form).forEach(element => { element.disabled = true; });
+    try {
+      await api(`/deliverables/${encodeURIComponent(form.dataset.id)}`, { method: 'PATCH', body: payload });
+      state.deliverableDirty = false; state.deliverableDraft = null; await refreshData(); return true;
+    } finally { state.deliverableSaving = false; if (view() === state && app.page === 'deliverables') render(); else renderShell(); }
+  }
+  async function download(path, fallbackName) {
+    const response = await api(path, { raw: true }); const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    let filename = fallbackName;
+    try { const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i); const ascii = disposition.match(/filename="?([^";]+)"?/i); if (utf) filename = decodeURIComponent(utf[1]); else if (ascii) filename = ascii[1]; } catch { /* Fall back to the safe local title. */ }
+    filename = String(filename).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 180);
+    const url = URL.createObjectURL(blob); const link = document.createElement('a');
+    link.href = url; link.download = filename; document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000); notify('文件已生成，下载已交给浏览器。');
+  }
+  async function exportDeliverable(id, format, button) {
+    if (!['md', 'html', 'docx'].includes(format)) return;
+    await withBusy(button, '正在导出…', async () => {
+      if (view().deliverableDirty && !await saveDeliverable($('#deliverable-form'))) return;
+      const item = record('deliverables', id); if (!item) throw new Error('交付记录不存在。');
+      await download(`/export/${encodeURIComponent(id)}?format=${format}`, `${item.title}.${format}`);
+    });
+  }
+  async function restoreBackup(file) {
+    if (!file) return;
+    try {
+      if (file.size > 64 * 1024 * 1024) throw new Error('备份文件过大，浏览器仅接收 64 MB 以内的 JSON 备份。');
+      let backup; try { backup = JSON.parse(await file.text()); } catch { throw new Error('无法解析备份，请选择有效的 Local WorkOS JSON 备份。'); }
+      if (backup.format !== 'local-workos' || backup.version !== 1 || !backup.data) throw new Error('不是受支持的 Local WorkOS v1 备份。');
+      if (backup.workspace !== app.workspace) throw new Error(`此备份属于${backup.workspace === 'demo' ? '演示' : '个人'}工作区。请先切换到对应工作区再恢复，不允许跨工作区混入数据。`);
+      const count = Object.values(backup.data).filter(Array.isArray).reduce((total, items) => total + items.length, 0);
+      openModal('恢复当前工作区备份', `${banner('将替换当前工作区数据', '服务端校验后事务恢复，并先备份当前数据库。另一工作区不受影响。', 'amber', 'warning')}<p class="confirm-copy mt-18">文件：${esc(file.name)}<br>目标：${workspaceName()}<br>备份导出时间：${esc(backup.exported_at || '未知')}<br>记录总数（含活动）：${count}</p><label class="consent mb-15"><input type="checkbox" name="confirmed" required><span>我确认用此备份替换当前${workspaceName()}。</span></label>`, async form => {
+        if (!form.get('confirmed')) throw new Error('请明确勾选恢复确认。');
+        const result = await api('/restore', { body: { backup, confirm: true } });
+        if (!result.restored) throw new Error('服务端没有确认恢复完成。');
+        views.delete(app.workspace); await refreshData(); render(); notify('当前工作区已恢复，另一工作区未改变。');
+      }, { submitText: '确认替换并恢复', danger: true, busyText: '正在事务恢复…' });
+    } catch (error) { showError(error); }
+    finally { $('#restore-input').value = ''; }
+  }
+  function renderSettings() {
+    const ai = app.boot?.ai || {};
+    return heading('设置与连接', 'LOCAL BY DEFAULT', '工作区、可选模型与数据安全，在这里保持透明。') +
+      `<div class="settings-grid"><div class="stack"><section class="panel settings-section"><h2>你的工作区</h2><p>默认打开个人空间。演示仅包含合成记录；两套本地数据库完全隔离。</p><div class="mode-options">${[['personal', '个人工作区', '我的项目、资料与稳定记忆', 'user'], ['demo', '演示工作区', '合成示例，可安全体验完整流程', 'briefcase']].map(([mode, title, text, symbol]) => `<button type="button" class="mode-card${app.workspace === mode ? ' active' : ''}" data-action="workspace" data-workspace="${mode}" aria-pressed="${app.workspace === mode}">${icon(symbol)}<strong>${title}${app.workspace === mode ? ' · 当前' : ''}</strong><small>${text}</small></button>`).join('')}</div></section>
+      <section class="panel settings-section"><h2>可选模型连接</h2><p>兼容 OpenAI 的模型接口。保存配置不会测试网络，也不会自动发送资料。不配置时，本地检索、规则纪要和财务测算仍可使用。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '未配置外部模型 · 当前离线工作'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('每次外发都需要你的明确授权', '仅研究页明确选中的非记忆资料可外发，且每次问答须重新勾选授权。请先脱敏。个人记忆永远只用于本地检索。', 'amber', 'shield')}</div></section></div>
+      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.0')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}</div></section>
+      <section class="panel settings-section"><h2>数据备份与恢复</h2><p>导出当前工作区的 JSON 备份，不包含 API Key。备份包含工作材料与记忆副本，请妥善保管。</p><div class="row wrap">${actionButton('导出当前备份', 'backup', 'download', 'soft')}${actionButton('选择备份恢复', 'restore', 'upload')}</div><p class="inline-note mt-18">恢复前校验格式、关联和大小；服务端先备份现有数据库，再事务替换当前工作区。不跨工作区恢复。</p></section>
+      <section class="panel settings-section"><h2>隐私边界</h2><p class="no-margin">默认无遥测、无云同步；不连接邮箱、微信、日历，不录音、不发邮件。记忆连接器不扫描凭证、浏览器配置、机器环境或设备配置。浏览器只与当前本地服务通信。</p></section>
+      <section class="panel settings-section danger-zone"><h2>关闭本地服务</h2><p>仅停止 Local WorkOS 当前服务。数据保留，但页面将失去连接；再次使用需重新运行启动器。</p>${actionButton('关闭服务', 'shutdown', 'logout', 'danger small')}</section></div></div>`;
+  }
+  async function saveAISettings(form) {
+    if (!form.reportValidity()) return;
+    const payload = { base_url: $('#ai-base-url').value.trim(), model: $('#ai-model').value.trim(), api_key: $('#ai-api-key').value };
+    $('#ai-api-key').value = '';
+    await withBusy($('button[type="submit"]', form), '正在保存到进程内存…', async () => {
+      const result = await api('/ai/settings', { body: payload }); payload.api_key = '';
+      app.boot.ai = result.ai || result; render(); notify('连接配置已保存到服务器内存，未测试网络、未发送资料。');
+    });
+    payload.api_key = '';
+  }
+
+  // Linked documents are generated as editable drafts, never as claims of verified facts.
+  async function deliverFromNote(id) {
+    const note = record('notes', id); if (!note) return;
+    await editRecord('deliverables', '', { title: note.title, project_id: note.project_id || '', kind: '研究简报', body: `# ${note.title}\n\n核实状态：${note.status}\n关联项目：${projectName(note.project_id)}\n\n## 研究结论\n${note.body || ''}\n\n## 证据与来源\n${note.source_quote || '尚未记录，请补充证据。'}${note.document_id ? `\n\n来源材料：${record('documents', note.document_id)?.title || note.document_id}` : ''}\n\n## 仍需核实\n${note.status === '已核实' ? '请在交付前再次检查证据的时效性与适用范围。' : '本条结论尚未完成核实，不应作为已确认事实。'}` });
+  }
+  async function deliverFromMeeting(id) {
+    const meeting = record('meetings', id); if (!meeting) return;
+    const summary = $('#meeting-summary')?.value ?? view().drafts.get(String(id))?.summary ?? meeting.summary;
+    const tasks = list('tasks').filter(task => String(task.meeting_id) === String(id));
+    await editRecord('deliverables', '', { title: `${meeting.title} · 纪要`, project_id: meeting.project_id || '', kind: '会议纪要', body: `# ${meeting.title}\n\n日期：${meeting.date || '未设置'}\n参会人：${meeting.participants || '未记录'}\n项目：${projectName(meeting.project_id)}\n\n## 会议纪要\n${summary || '请补充会议纪要。'}\n\n## 已确认并创建的行动项\n${tasks.length ? tasks.map(task => `- [${task.status === '完成' ? 'x' : ' '}] ${task.title}｜${task.owner || '未分配'}｜${task.due || '未定日期'}｜${task.status}`).join('\n') : '暂无已确认任务。候选行动不代表承诺。'}\n\n说明：会议草稿使用确定性规则整理，请核对原文。` });
+  }
+  async function deliverFromProject(id) {
+    const project = record('projects', id); if (!project) return;
+    const tasks = list('tasks').filter(task => String(task.project_id) === String(id)); const notes = list('notes').filter(note => String(note.project_id) === String(id));
+    await editRecord('deliverables', '', { title: `${project.name} · 项目简报`, project_id: id, kind: '项目周报', body: `# ${project.name} · 项目简报\n\n日期：${today()}\n阶段：${project.stage}\n行业：${project.sector || '未设置'}\n负责人：${project.owner || '未分配'}\n估值备注：${project.valuation || '未设置'}\n\n## 核心判断\n${project.thesis || '待补充'}\n\n## 下一步\n${project.next_step || '待补充'}\n\n## 研究结论\n${notes.map(note => `- ${note.title}（${note.status}）\n  ${note.body}`).join('\n') || '暂无'}\n\n## 任务进展\n${tasks.map(task => `- [${task.status === '完成' ? 'x' : ' '}] ${task.title}｜${task.status}｜${task.due || '未定日期'}`).join('\n') || '暂无'}` });
+  }
+  async function deliverFromFinance() {
+    const state = view(); const result = state.financeResult;
+    if (!result || state.financeDirty) { notify('请先用当前假设重新计算。', true); return; }
+    const assumptions = FINANCE_FIELDS.map(([key, label, unit]) => `${label}：${number(state.finance[key] * (PERCENT_FIELDS.has(key) ? 100 : 1))} ${unit}`).join('\n');
+    await editRecord('deliverables', '', { title: `简化回报测算 · ${today()}`, kind: '自定义', body: `# 简化权益回报测算\n\n人民币百万元 · 非完整 LBO · 非投资建议\n\n## 假设\n${assumptions}\n\n## 情景结果\n${[['bear', '保守'], ['base', '基准'], ['bull', '乐观']].map(([key, label]) => `${label}：IRR ${percent(result[key]?.irr)}；MOIC ${number(result[key]?.moic)}×`).join('\n')}\n\n## 基准股权价值\n进入EV：${number(result.base?.entry_ev)}\n初始股权投入：${number(result.base?.entry_equity)}\n退出股权价值：${number(result.base?.exit_equity)}\n\n## 计算口径\n${typeof result.formulas === 'string' ? result.formulas : JSON.stringify(result.formulas, null, 2)}\n\n## 简化边界\n${typeof result.warning === 'string' ? result.warning : JSON.stringify(result.warning || '')}` });
+  }
+
+  // Global search is explicitly scoped to the current workspace by the shared API client.
+  let searchTimer = null; let searchSequence = 0;
+  function openSearch() {
+    if (!app.data || app.stopped) return;
+    const dialog = $('#search-dialog');
+    if (dialog.open) { $('#global-search').focus(); return; }
+    dialog.innerHTML = `<div class="search-dialog-top">${icon('search')}<label class="sr-only" for="global-search">搜索工作空间</label><input id="global-search" type="search" placeholder="搜索项目、材料原文、任务、会议…" autocomplete="off"><button type="button" class="icon-button" data-close-dialog="search-dialog" aria-label="关闭搜索"><kbd>Esc</kbd></button></div><div class="search-results" id="search-results">${empty('search', '让需要的信息，回到眼前', '输入关键词搜索当前工作区。结果中的材料可直接定位原文。', '', true)}</div><div class="search-footer"><span>${workspaceName()} · 只搜索本地业务记录</span><span>↑ ↓ 选择 · Enter 打开 · Esc 关闭</span></div>`;
+    dialog.showModal(); $('#global-search').focus();
+    $('#global-search').addEventListener('input', () => { clearTimeout(searchTimer); const query = $('#global-search').value.trim(); const sequence = ++searchSequence; searchTimer = setTimeout(() => runSearch(query, sequence), 180); });
+    dialog.onkeydown = event => {
+      if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+      const buttons = $$('.search-result', dialog); if (!buttons.length) return;
+      event.preventDefault(); const index = buttons.indexOf(document.activeElement);
+      const next = event.key === 'ArrowDown' ? (index + 1) % buttons.length : (index <= 0 ? buttons.length - 1 : index - 1); buttons[next].focus();
+    };
+  }
+  async function runSearch(query, sequence) {
+    const resultsElement = $('#search-results'); if (!resultsElement || !$('#search-dialog').open) return;
+    if (!query) { resultsElement.innerHTML = empty('search', '输入关键词开始搜索', '仅搜索当前工作区。', '', true); return; }
+    resultsElement.innerHTML = loading('正在检索本地工作空间…');
+    try {
+      const result = await api(`/search?${new URLSearchParams({ q: query })}`);
+      if (sequence !== searchSequence || !$('#search-dialog').open) return;
+      const typeMap = { project: ['项目', 'projects', 'projects'], projects: ['项目', 'projects', 'projects'], task: ['任务', 'tasks', 'tasks'], tasks: ['任务', 'tasks', 'tasks'], document: ['资料', 'file', 'documents'], documents: ['资料', 'file', 'documents'], meeting: ['会议', 'meetings', 'meetings'], meetings: ['会议', 'meetings', 'meetings'], note: ['结论', 'book', 'notes'], notes: ['结论', 'book', 'notes'], deliverable: ['交付', 'deliverables', 'deliverables'], deliverables: ['交付', 'deliverables', 'deliverables'] };
+      resultsElement.innerHTML = result.results?.length ? result.results.map(item => { const [label, symbol, collection] = typeMap[item.type] || ['记录', 'file', 'documents']; return `<button type="button" class="search-result" data-action="search-result" data-collection="${collection}" data-id="${esc(item.id)}">${icon(symbol)}<div><h3>${esc(item.title)}</h3><p>${esc(item.excerpt)}</p></div><span class="tag">${label}</span></button>`; }).join('') : empty('search', '未找到匹配记录', '试试更短的关键词，或确认当前工作区。', '', true);
+    } catch (error) { if (sequence === searchSequence && $('#search-dialog').open) resultsElement.innerHTML = banner('搜索未完成', error.message, 'error', 'warning'); }
+  }
+  async function openRecord(collection, id) {
+    if (collection === 'documents') return openDocument(id);
+    if (collection === 'projects') { if (!await navigate('projects')) return; view().projectId = id; render(); requestAnimationFrame(() => $('#project-detail')?.scrollIntoView({ block: 'nearest' })); }
+    else if (collection === 'tasks') { if (!await navigate('tasks')) return; view().taskProject = ''; view().taskQuery = ''; view().taskPriority = ''; view().highlightTask = id; render(); }
+    else if (collection === 'meetings') { if (!await navigate('meetings')) return; view().meetingProject = ''; view().meetingId = id; render(); }
+    else if (collection === 'notes') { if (!await navigate('research')) return; await editRecord('notes', id); }
+    else if (collection === 'deliverables') { if (!await canLeave()) return; view().deliverableDirty = false; view().deliverableId = id; await navigate('deliverables'); }
+  }
+
+  // Page-specific bindings keep render functions side-effect free.
+  function bindSearchInput(id, property) {
+    const input = $(`#${id}`); if (!input) return;
+    input.addEventListener('input', event => {
+      const value = event.target.value; const position = event.target.selectionStart;
+      view()[property] = value; render(); const replacement = $(`#${id}`); replacement?.focus();
+      if (replacement && position != null) replacement.setSelectionRange(position, position);
+    });
+  }
+  function bindSelect(id, handler) { $(`#${id}`)?.addEventListener('change', event => handler(event.target.value)); }
+  function bindSubmit(id, handler) { $(`#${id}`)?.addEventListener('submit', event => { event.preventDefault(); Promise.resolve(handler(event.currentTarget)).catch(showError); }); }
+  function bindPage() {
+    bindSearchInput('project-search', 'projectQuery'); bindSearchInput('task-search', 'taskQuery'); bindSearchInput('source-search', 'sourceQuery'); bindSearchInput('memory-search', 'memoryQuery');
+    bindSelect('task-project', value => { view().taskProject = value; render(); });
+    bindSelect('task-priority', value => { view().taskPriority = value; render(); });
+    bindSelect('research-project', value => { view().researchProject = value; view().selectedSources.clear(); render(); });
+    bindSelect('meeting-project', value => { captureMeetingDraft(); view().meetingProject = value; render(); });
+    bindSelect('ask-mode', value => { view().askMode = value; render(); });
+    $('#question-input')?.addEventListener('input', event => { view().question = event.target.value; });
+    $$('[data-source-id]').forEach(input => input.addEventListener('change', () => { if (input.checked) view().selectedSources.add(String(input.dataset.sourceId)); else view().selectedSources.delete(String(input.dataset.sourceId)); render(); }));
+    $('#source-select-all')?.addEventListener('change', event => { filteredSources().forEach(doc => { if (event.target.checked) view().selectedSources.add(String(doc.id)); else view().selectedSources.delete(String(doc.id)); }); render(); });
+    $$('[data-task-status]').forEach(select => select.addEventListener('change', async () => {
+      const id = select.dataset.taskStatus; const previous = record('tasks', id)?.status; select.disabled = true;
+      try { await api(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: select.value } }); await refreshData(); render(); notify('任务状态已更新。'); }
+      catch (error) { select.value = previous; select.disabled = false; showError(error); }
+    }));
+    bindSubmit('ask-form', askQuestion); bindSubmit('meeting-summary-form', saveMeetingSummary); bindSubmit('meeting-actions-form', createMeetingTasks); bindSubmit('finance-form', calculateFinance); bindSubmit('ai-settings-form', saveAISettings);
+    $('#meeting-summary')?.addEventListener('input', () => { captureMeetingDraft(); $('#meeting-save-state').textContent = '尚未保存，请保存纪要'; });
+    $('#meeting-actions-form')?.addEventListener('input', captureMeetingDraft);
+    bindSubmit('deliverable-form', async form => withBusy($('button[type="submit"]', form), '正在保存…', async () => { if (await saveDeliverable(form)) notify('交付修改已保存。'); }));
+    const editor = $('#deliverable-form');
+    if (editor) {
+      const capture = () => {
+        view().deliverableDirty = true;
+        view().deliverableDraft = { id: editor.dataset.id, ...Object.fromEntries(new FormData(editor).entries()) };
+        $('#deliverable-save-state').textContent = `尚未保存 · ${$('#deliverable-body').value.length} 字`;
+      };
+      editor.addEventListener('input', capture); editor.addEventListener('change', capture);
+      if (view().deliverableDirty) $('#deliverable-save-state').textContent = `尚未保存 · ${$('#deliverable-body').value.length} 字`;
+      if (view().deliverableSaving) { $$('input,textarea,select,button', editor).forEach(element => { element.disabled = true; }); $('#deliverable-save-state').textContent = '正在保存…'; }
+    }
+    $('#finance-form')?.addEventListener('input', event => {
+      const key = event.target.name;
+      if (key in FINANCE_DEFAULTS && event.target.value !== '' && Number.isFinite(Number(event.target.value))) view().finance[key] = Number(event.target.value) / (PERCENT_FIELDS.has(key) ? 100 : 1);
+      view().financeDirty = true; persistFinance(); $('#finance-dirty-note').textContent = '假设已改变，右侧仍为上次结果。请重新运行测算。';
+      const saveButton = $('[data-action="finance-deliverable"]'); if (saveButton) saveButton.disabled = true;
+    });
+    if (app.page === 'finance' && !view().financeAutoStarted) { view().financeAutoStarted = true; queueMicrotask(() => { if (app.page === 'finance') calculateFinance(); }); }
+  }
+  function captureMeetingDraft() {
+    const form = $('#meeting-summary-form'); if (!form) return;
+    const id = String(form.dataset.id); const draft = view().drafts.get(id) || { summary: '', actions: [], mode: 'rules' };
+    draft.summary = $('#meeting-summary').value;
+    const actionForm = $('#meeting-actions-form');
+    if (actionForm) draft.actions.forEach((action, index) => {
+      const title = $(`[name="title-${index}"]`, actionForm); const owner = $(`[name="owner-${index}"]`, actionForm); const due = $(`[name="due-${index}"]`, actionForm);
+      if (title && !title.disabled) { action.title = title.value; action.owner = owner.value; action.due = due.value; }
+    });
+    view().drafts.set(id, draft);
+  }
+
+  async function handleAction(button) {
+    const { action, id, collection } = button.dataset;
+    switch (action) {
+      case 'retry': return boot();
+      case 'create': return editRecord(collection, '', { project_id: app.page === 'research' ? view().researchProject : app.page === 'tasks' ? view().taskProject : app.page === 'meetings' ? view().meetingProject : '' });
+      case 'edit': return editRecord(collection, id);
+      case 'delete': return deleteRecord(collection, id);
+      case 'modal-delete': $('#modal').close(); return deleteRecord(collection, id);
+      case 'workspace': return switchWorkspace(button.dataset.workspace);
+      case 'project-stage': view().projectStage = button.dataset.value; render(); return;
+      case 'project-detail': view().projectId = id; render(); requestAnimationFrame(() => $('#project-detail')?.scrollIntoView({ block: 'nearest' })); return;
+      case 'project-close': view().projectId = ''; render(); return;
+      case 'project-create': return editRecord(collection, '', { project_id: button.dataset.projectId });
+      case 'project-go': return navigate(button.dataset.pageTarget, { projectId: id });
+      case 'project-deliverable': return deliverFromProject(id);
+      case 'task-new-status': return editRecord('tasks', '', { status: button.dataset.status, project_id: view().taskProject });
+      case 'task-toggle': return withBusy(button, '', async () => { const task = record('tasks', id); if (!task) return; await api(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: task.status === '完成' ? '待办' : '完成' } }); await refreshData(); render(); notify('任务已完成。'); });
+      case 'research-import': await navigate('research'); $('#upload-input').click(); return;
+      case 'upload': if (!app.uploadBusy) $('#upload-input').click(); return;
+      case 'new-meeting': await navigate('meetings'); return editRecord('meetings');
+      case 'new-deliverable': await navigate('deliverables'); return editRecord('deliverables');
+      case 'go-finance': return navigate('finance');
+      case 'document': return openDocument(id);
+      case 'document-edit': $('#document-dialog').close(); return editRecord('documents', id);
+      case 'document-delete': $('#document-dialog').close(); return deleteRecord('documents', id);
+      case 'citation': { const citation = view().answers[Number(button.dataset.answer)]?.citations?.[Number(button.dataset.citation)]; if (citation) return openDocument(citation.document_id, citation); return; }
+      case 'answer-note': { const answer = view().answers[Number(button.dataset.index)]; if (!answer) return; return editRecord('notes', '', { title: excerpt(answer.question, 90), project_id: answer.project_id, body: answer.answer, status: '待核实', document_id: answer.citations?.[0]?.document_id || '', source_quote: (answer.citations || []).map((cite, index) => `[${index + 1}] ${cite.title} · ${cite.page != null ? `第${cite.page}页 / ` : ''}第${cite.ordinal}段\n${cite.quote}`).join('\n\n') }); }
+      case 'note-source': { const note = record('notes', id); if (note?.document_id) return openDocument(note.document_id, { quote: note.source_quote }); return; }
+      case 'note-deliverable': return deliverFromNote(id);
+      case 'select-meeting': captureMeetingDraft(); view().meetingId = id; render(); return;
+      case 'meeting-draft': return generateMeetingDraft(id, button);
+      case 'meeting-deliverable': return deliverFromMeeting(id);
+      case 'meeting-new-task': { const meeting = record('meetings', id); return editRecord('tasks', '', { meeting_id: id, project_id: meeting?.project_id || '' }); }
+      case 'memory-category': view().memoryCategory = button.dataset.value; render(); return;
+      case 'memory-scan': return scanMemory(button);
+      case 'finance-reset': view().finance = { ...FINANCE_DEFAULTS }; view().financeDirty = true; persistFinance(); render(); return calculateFinance();
+      case 'finance-deliverable': return deliverFromFinance();
+      case 'select-deliverable': if (String(view().deliverableId) === String(id)) return; if (!await canLeave()) return; view().deliverableDirty = false; view().deliverableId = id; render(); return;
+      case 'export': return exportDeliverable(id, button.dataset.format, button);
+      case 'backup': return withBusy(button, '正在备份…', () => download('/backup', `LocalWorkOS-${app.workspace}-${today()}.json`));
+      case 'restore': $('#restore-input').click(); return;
+      case 'refresh-status': return withBusy(button, '正在检查…', async () => { app.boot = await api('/bootstrap'); app.csrf = app.boot.csrf; await refreshData(); render(); notify('本地服务已连接，数据已刷新。'); });
+      case 'shutdown': if (await confirmDialog('关闭 Local WorkOS 本地服务？', '数据仍保存在本机。页面将断开连接，再次使用需重新运行启动器。', '确认关闭服务', true)) { await api('/shutdown', { body: {} }); app.stopped = true; $('#main').innerHTML = `<section class="state-error"><h1>本地服务已关闭</h1><p>数据已保留。请重新运行 Local WorkOS 启动器，然后点击重新连接。</p>${actionButton('重新连接', 'retry', 'refresh', 'primary')}</section>`; $('#connection-label').textContent = '服务已关闭'; } return;
+      case 'search-result': $('#search-dialog').close(); return openRecord(collection, id);
+      case 'open-record': return openRecord(collection, id);
+      default: notify('此操作暂时不可用，请刷新页面后重试。', true);
+    }
+  }
+  function initialize() {
+    $('#mobile-menu').innerHTML = icon('menu'); $('#search-icon').innerHTML = icon('search');
+    $('#mobile-menu').addEventListener('click', () => { const open = !$('#sidebar').classList.contains('open'); $('#sidebar').classList.toggle('open', open); $('#sidebar-scrim').hidden = !open; $('#mobile-menu').setAttribute('aria-expanded', String(open)); });
+    $('#sidebar-scrim').addEventListener('click', closeSidebar);
+    $('#search-trigger').addEventListener('click', openSearch);
+    $('#workspace-switch').addEventListener('click', () => { if (app.data) workspaceDialog(); });
+    $('#upload-input').addEventListener('change', event => uploadFiles([...event.target.files]));
+    $('#restore-input').addEventListener('change', event => restoreBackup(event.target.files[0]));
+    $('#modal').addEventListener('cancel', event => { if (app.modalBusy) event.preventDefault(); });
+    $('#search-dialog').addEventListener('close', () => { clearTimeout(searchTimer); searchSequence++; });
+    document.addEventListener('click', async event => {
+      const close = event.target.closest('[data-close-dialog]');
+      if (close) { if (close.dataset.closeDialog === 'modal' && app.modalBusy) return; document.getElementById(close.dataset.closeDialog)?.close(); return; }
+      const page = event.target.closest('[data-page]');
+      if (page) { event.preventDefault(); if (!app.data || app.stopped) return; captureMeetingDraft(); await navigate(page.dataset.page); return; }
+      const button = event.target.closest('[data-action]');
+      if (button && !button.disabled) { event.preventDefault(); try { await handleAction(button); } catch (error) { showError(error); } }
+    });
+    document.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (!$$('dialog[open]').some(dialog => dialog.id !== 'search-dialog')) openSearch(); }
+      if (event.key === 'Escape') { if ($('#search-dialog').open) { event.preventDefault(); $('#search-dialog').close(); } closeSidebar(); }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && app.page === 'deliverables' && $('#deliverable-form') && !$$('dialog[open]').length) { event.preventDefault(); $('#deliverable-form').requestSubmit(); }
+    });
+    window.addEventListener('beforeunload', event => { if (view().deliverableDirty || app.mutations) { event.preventDefault(); event.returnValue = ''; } });
+    window.addEventListener('hashchange', async () => { const target = location.hash.slice(1); if (ROUTES.some(route => route[0] === target)) await navigate(target); });
+    boot();
+  }
+  initialize();
+})();
