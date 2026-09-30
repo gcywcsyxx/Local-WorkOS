@@ -110,7 +110,9 @@ class MemoryTests(unittest.TestCase):
         linked_folder.mkdir()
         self.fixture('linked-folder/notes.md')
         real_linked = memory._linked
-        with patch('workos.memory._linked', side_effect=lambda path: path in (linked, linked_folder) or real_linked(path)):
+        # Windows CI may use an 8.3 TEMP alias while _safe_root resolves it.
+        blocked = {linked.resolve(), linked_folder.resolve()}
+        with patch('workos.memory._linked', side_effect=lambda path: path.resolve() in blocked or real_linked(path)):
             self.assertEqual(memory.candidates(self.root), {})
             with self.assertRaises(ValueError):
                 memory.import_memories(self.root, ['linked.md'], self.store)
