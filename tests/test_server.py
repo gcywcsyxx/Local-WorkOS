@@ -283,20 +283,37 @@ class ServerTests(unittest.TestCase):
         bootstrap = self.request('GET', '/api/bootstrap')[1]
         self.assertFalse(bootstrap['sync']['enabled'])
 
-    def test_valuation_xlsx_export_contains_reproducible_inputs_and_outputs(self):
+    def test_valuation_xlsx_export_contains_live_model_formulas(self):
         from openpyxl import load_workbook
         import io
         assumptions={'currency':'RMB','unit':'百万元','period':'FY2025A','net_income':100,'pe_multiple':12}
         status,raw=self.request('POST','/api/model/export-xlsx',{'method':'net_income','assumptions':assumptions,'title':'Synthetic Model'})
-        self.assertEqual(status,200)
-        self.assertTrue(raw.startswith(b'PK\x03\x04'))
-        wb=load_workbook(io.BytesIO(raw),data_only=True)
+        self.assertEqual(status,200);self.assertTrue(raw.startswith(b'PK\x03\x04'))
+        wb=load_workbook(io.BytesIO(raw),data_only=False)
         self.assertIn('Summary',wb.sheetnames);self.assertIn('Assumptions',wb.sheetnames)
-        rows={wb['Summary'].cell(row,1).value:wb['Summary'].cell(row,2).value for row in range(1,wb['Summary'].max_row+1)}
-        self.assertEqual(rows['equity_value'],1200)
+        self.assertEqual(wb['Summary']['B7'].value,'=Assumptions!$B$5*Assumptions!$B$6')
+        ps={'currency':'RMB','unit':'百万元','period':'FY2025A','revenue':500,'ps_multiple':2}
+        status,psraw=self.request('POST','/api/model/export-xlsx',{'method':'ps','assumptions':ps})
+        self.assertEqual(status,200)
+        pswb=load_workbook(io.BytesIO(psraw),data_only=False)
+        self.assertEqual(pswb['Summary']['B7'].value,'=Assumptions!$B$5*Assumptions!$B$6')
         self.assertEqual(self.request('POST','/api/model/export-xlsx',{'method':'net_income','assumptions':{'net_income':-1,'pe_multiple':12}})[0],400)
-
-    def test_valuation_api_is_deterministic_and_nl_parse_runs_without_extra_prompts(self):
+        dcf={'currency':'RMB','unit':'百万元','valuation_date':'2025-12-31','wacc':0.10,'discount_timing':'year_end','terminal_method':'perpetuity','terminal_growth':0.02,'net_debt':10,'minority_interest':0,'forecasts':[{'year':'2026E','ebit':100,'da':10,'capex':20,'delta_nwc':5,'tax_rate':0.25}]}
+        status,raw=self.request('POST','/api/model/export-xlsx',{'method':'dcf','assumptions':dcf})
+        self.assertEqual(status,200)
+        model=load_workbook(io.BytesIO(raw),data_only=False)
+        self.assertEqual(model['DCF_Forecast']['I2'].value,'=E2+F2-G2-H2')
+        self.assertEqual(model['DCF_Forecast']['L2'].value,'=I2*K2')
+        self.assertIn('DCF_Forecast',model.sheetnames)
+        lbo={'currency':'RMB','unit':'百万元','entry_date':'2026-01-01','exit_date':'2030-01-01','entry_ev':1000,'entry_debt':500,'entry_fees':10,'minimum_cash':10,'initial_cash':10,'seller_rollover':0,'exit_fees':10,'exit_multiple':10,'forecasts':[{'year':'2026','ebitda':100,'da':10,'capex':20,'delta_nwc':5,'tax_rate':0.25,'interest_rate':0.06,'mandatory_amortization':20,'cash_sweep_pct':0.5}]}
+        status,raw=self.request('POST','/api/model/export-xlsx',{'method':'lbo','assumptions':lbo})
+        self.assertEqual(status,200)
+        model=load_workbook(io.BytesIO(raw),data_only=False);ws=model['LBO_Model']
+        self.assertEqual(ws['L2'].value,'=J2*G2')
+        self.assertEqual(ws['R2'].value,'=MAX(0,J2-P2-Q2)')
+        self.assertEqual(ws['B7'].value,'=B5/B6')
+        self.assertTrue(str(ws['B10'].value).startswith('=B7^'))
+        self.assertIn('Python Ground Truth',str(ws['A12'].value))
         assumptions = {'currency': 'RMB', 'unit': '百万元', 'period': 'FY2025A', 'net_income': 100, 'pe_multiple': 12}
         status, result = self.request('POST', '/api/model/valuation', {'method': 'net_income', 'assumptions': assumptions})
         self.assertEqual(status, 200, result)
