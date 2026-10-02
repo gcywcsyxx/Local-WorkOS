@@ -17,8 +17,13 @@ import unicodedata
 from xml.etree import ElementTree
 import zipfile
 
-MAX_UPLOAD_BYTES = 12 * 1024 * 1024
-MAX_TEXT_CHARS = 4_000_000
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_OFFICE_ENTRIES = 5000
+MAX_OFFICE_EXPANDED_BYTES = 128 * 1024 * 1024
+MAX_OFFICE_MEMBER_BYTES = 32 * 1024 * 1024
+MAX_XLSX_CELLS = 100_000
+MAX_PPTX_SLIDES = 500
+MAX_TEXT_CHARS = 2_000_000
 MAX_DOCX_EXPANDED_BYTES = 32 * 1024 * 1024
 MAX_DOCX_MEMBER_BYTES = 12 * 1024 * 1024
 MAX_PDF_PAGES = 500
@@ -107,6 +112,153 @@ def _parse_docx(data: bytes) -> dict:
         raise ValueError("DOCX 文件损坏或正文无法解析。") from exc
 
 
+def _validate_office_zip(data: bytes, expected: str, label: str):
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_OFFICE_ENTRIES:
+                raise ValueError(f'{label} 包含过多压缩条目。')
+            total = 0
+            names = set()
+            for member in members:
+                name = member.filename.replace('\\', '/')
+                parts = PurePosixPath(name).parts
+                if (not name or name.startswith('/') or '\x00' in name or ':' in name
+                        or '..' in parts or stat.S_ISLNK(member.external_attr >> 16)):
+                    raise ValueError(f'{label} 包含不安全的压缩路径或符号链接。')
+                if name in names:
+                    raise ValueError(f'{label} 包含重复的压缩路径。')
+                names.add(name)
+                if member.flag_bits & 1:
+                    raise ValueError(f'不支持加密的 {label} 文件。')
+                if member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                    raise ValueError(f'{label} 使用了不支持的压缩格式。')
+                total += member.file_size
+                if (member.file_size > MAX_OFFICE_MEMBER_BYTES or total > MAX_OFFICE_EXPANDED_BYTES
+                        or (member.file_size > 1024 * 1024 and member.file_size > max(member.compress_size, 1) * 1000)):
+                    raise ValueError(f'{label} 解压量或压缩比超过安全限制。')
+            if expected not in names:
+                raise ValueError(f'{label} 缺少必要的包结构。')
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f'{label} 不是有效的 Office 压缩文件。') from exc
+
+
+def _office_value(value):
+    if value is None:
+        return ''
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, float):
+        return format(value, '.12g')
+    return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
+
+def _parse_pptx(data: bytes) -> dict:
+    _validate_office_zip(data, 'ppt/presentation.xml', 'PPTX')
+    try:
+        from pptx import Presentation
+        presentation = Presentation(BytesIO(data))
+        if len(presentation.slides) > MAX_PPTX_SLIDES:
+            raise ValueError(f'PPTX 超过 {MAX_PPTX_SLIDES} 页的安全限制。')
+        pages = []
+        total_chars = 0
+        warnings = ['PPTX 提取文本和表格；图片、备注及复杂图表版式可能不完整，公式/图表不在此重算。']
+        for index, slide in enumerate(presentation.slides, 1):
+            pieces = []
+            for shape in slide.shapes:
+                if getattr(shape, 'has_text_frame', False):
+                    text = shape.text.strip()
+                    if text:
+                        pieces.append(text)
+                if getattr(shape, 'has_table', False):
+                    for row in shape.table.rows:
+                        line = ' | '.join(cell.text.strip() for cell in row.cells)
+                        if line.strip(' |'):
+                            pieces.append(line)
+                if getattr(shape, 'has_chart', False):
+                    chart = shape.chart
+                    if chart.has_title:
+                        pieces.append('图表标题: ' + chart.chart_title.text_frame.text.strip())
+                    for series in chart.series:
+                        values = list(series.values)[:100]
+                        pieces.append('图表序列 ' + str(series.name) + ': ' + ', '.join(_office_value(value) for value in values))
+            text = 'Slide ' + str(index) + '\n' + '\n'.join(pieces)
+            total_chars += len(text)
+            if total_chars > MAX_TEXT_CHARS:
+                raise ValueError('PPTX 提取文字超过安全大小限制。')
+            pages.append({'page': index, 'text': text})
+        content = '\n\n'.join(page['text'] for page in pages)
+        return {'content': content, 'page_count': max(1, len(pages)), 'pages': pages, 'warnings': warnings}
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError('PPTX 文件损坏或文本结构无法解析。') from exc
+
+
+def _parse_xlsx(data: bytes, *, macro_enabled=False) -> dict:
+    _validate_office_zip(data, 'xl/workbook.xml', 'Excel')
+    try:
+        from openpyxl import load_workbook
+        formula_book = load_workbook(BytesIO(data), read_only=True, data_only=False, keep_links=False, keep_vba=False)
+        value_book = load_workbook(BytesIO(data), read_only=True, data_only=True, keep_links=False, keep_vba=False)
+        try:
+            if len(formula_book.worksheets) > MAX_OFFICE_ENTRIES:
+                raise ValueError('Excel 工作表数量超过安全限制。')
+            pages = []
+            warnings = ['公式未重算；缓存值可能过期。不会执行宏、刷新外部链接或修改原工作簿。']
+            if macro_enabled:
+                warnings.append('XLSM 按只读方式提取单元格；VBA 宏不会执行或写回。')
+            cell_count = 0
+            total_chars = 0
+            for sheet_index, formula_sheet in enumerate(formula_book.worksheets, 1):
+                value_sheet = value_book[formula_sheet.title]
+                label = 'Sheet ' + str(sheet_index) + ': ' + formula_sheet.title
+                if formula_sheet.sheet_state != 'visible':
+                    label += ' [hidden]'
+                lines = [label]
+                formula_rows = formula_sheet.iter_rows(values_only=False)
+                value_rows = value_sheet.iter_rows(values_only=True)
+                truncated = False
+                for row_number, pair in enumerate(zip(formula_rows, value_rows), 1):
+                    formula_row, cached_row = pair
+                    entries = []
+                    for column_index, cell in enumerate(formula_row, 1):
+                        cell_count += 1
+                        if cell_count > MAX_XLSX_CELLS:
+                            truncated = True
+                            break
+                        formula_value = cell.value
+                        cached_value = cached_row[column_index - 1] if column_index - 1 < len(cached_row) else None
+                        if formula_value is None:
+                            continue
+                        address = cell.coordinate
+                        if cell.data_type == 'f' or (isinstance(formula_value, str) and formula_value.startswith('=')):
+                            text = address + ': formula=' + _office_value(formula_value) + '; cached=' + (_office_value(cached_value) or '[blank]')
+                        else:
+                            text = address + ': ' + _office_value(formula_value)
+                        entries.append(text)
+                    if entries:
+                        lines.append(' | '.join(entries))
+                    if truncated:
+                        break
+                text = '\n'.join(lines)
+                total_chars += len(text)
+                if total_chars > MAX_TEXT_CHARS:
+                    raise ValueError('Excel 提取文字超过安全大小限制。')
+                pages.append({'page': sheet_index, 'text': text})
+                if truncated:
+                    warnings.append(f'单元格提取达到 {MAX_XLSX_CELLS} 个上限，后续内容未解析。')
+                    break
+            content = '\n\n'.join(page['text'] for page in pages)
+            return {'content': content, 'page_count': max(1, len(pages)), 'pages': pages, 'warnings': warnings}
+        finally:
+            formula_book.close(); value_book.close()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError('Excel 文件损坏或单元格结构无法解析。') from exc
+
+
 def _parse_pdf(data: bytes) -> dict:
     try:
         from pypdf import PdfReader  # Optional pure-Python dependency.
@@ -148,10 +300,14 @@ def parse_upload(name: str, data: bytes) -> dict:
     if not data:
         raise ValueError("上传文件不能为空。")
     if len(data) > MAX_UPLOAD_BYTES:
-        raise ValueError("上传文件不能超过 12MB。")
+        raise ValueError("上传文件不能超过 20MB。")
     extension = PurePosixPath(name.replace("\\", "/")).suffix.lower()
-    if extension not in (".txt", ".md", ".pdf", ".docx"):
-        raise ValueError("仅支持 TXT、MD、PDF 和 DOCX 文件。")
+    if extension not in (".txt", ".md", ".pdf", ".docx", ".pptx", ".xlsx", ".xlsm"):
+        raise ValueError("仅支持 TXT、MD、PDF、DOCX、PPTX、XLSX 和 XLSM 文件。")
+    if extension == ".pptx":
+        return _parse_pptx(data)
+    if extension in (".xlsx", ".xlsm"):
+        return _parse_xlsx(data, macro_enabled=extension == ".xlsm")
     if extension == ".pdf":
         return _parse_pdf(data)
     if extension == ".docx":

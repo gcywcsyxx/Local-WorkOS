@@ -16,11 +16,11 @@ The UI reads one shared state endpoint rather than keeping separate disconnected
 
 PDF text retains actual page boundaries. TXT/Markdown/DOCX use ordinal chunk citations without invented page numbers. Stable chunk IDs and attributed excerpts support a source viewer.
 
-Local retrieval is deterministic lexical matching, not a language model. Irrelevant questions can return no evidence. Optional OpenAI-compatible requests require explicit document selection and per-request external authorization. Imported memory is rejected from remote-model requests before any network call. Keys stay in server memory and are excluded from bootstrap responses and backups.
+Local retrieval is deterministic lexical matching, not a language model. Irrelevant questions can return no evidence. Both the local DSH GPT route and optional OpenAI-compatible route take the current document selection as their scope, without a separate document selection and per-request external authorization. Imported memory is rejected before any remote call. DSH GPT runs through the existing authenticated DSH CLI using a per-request overlay; its tool plugins, session-log/title/telemetry plugins are disabled, and its session store, overlay and captured answer live in a disposable system-temp directory removed after the response. OAuth credentials remain in DSH; custom API keys stay in WorkOS server memory and are excluded from bootstrap responses and backups.
 
 ## Memory boundary
 
-Memory discovery is disabled unless an absolute `WORKOS_MEMORY_ROOT` folder is configured. There is no implicit home-directory, ancestor or cloud-folder discovery. Allowed Markdown files remain read-only; excluded credential/environment/hidden/archive folders are pruned. Linked/reparse paths are rejected and import rechecks the allowlist. Text filtering is best-effort, not an anonymity guarantee.
+Automatic memory discovery remains disabled unless an absolute `WORKOS_MEMORY_ROOT` folder is configured; there is no implicit home-directory, ancestor or cloud-folder discovery. In the personal workspace, the user may explicitly select TXT/MD/PDF/DOCX files or a folder in the browser. The server accepts only relative file paths, rejects hidden/credential/environment/archive components, sanitizes extracted text, stores read-only copies locally and never sends `kind=memory` to a model. Folder selection is capped; sanitization is best-effort, not a guarantee of complete anonymization.
 
 ## Deterministic finance
 

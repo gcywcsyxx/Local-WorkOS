@@ -9,6 +9,7 @@
   <title>Local WorkOS · 工作总览</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
+  <script src="/valuation.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -26,7 +27,7 @@
       <div class="sidebar-bottom">
         <div class="local-note"><span class="status-dot"></span><div>本地优先<span>你的材料，留在你的电脑</span></div></div>
         <button class="nav-item settings-nav" data-page="settings" type="button" id="settings-nav"></button>
-        <div class="sidebar-footer"><span>为专注而设计</span><span id="version-label">v1.0</span></div>
+        <div class="sidebar-footer"><span>为专注而设计</span><span id="version-label">v1.3</span></div>
       </div>
     </aside>
     <div class="main-shell">
@@ -42,7 +43,9 @@
   <dialog id="document-dialog" class="document-dialog" aria-labelledby="document-title"></dialog>
   <dialog id="search-dialog" class="search-dialog" aria-label="搜索工作空间"></dialog>
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
-  <input id="upload-input" type="file" accept=".txt,.md,.pdf,.docx" multiple hidden>
+  <input id="upload-input" type="file" accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.xlsm" multiple hidden>
+  <input id="memory-file-input" type="file" accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.xlsm" multiple hidden>
+  <input id="memory-folder-input" type="file" accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.xlsm" webkitdirectory directory multiple hidden>
   <input id="restore-input" type="file" accept=".json,application/json" hidden>
 </body>
 </html>

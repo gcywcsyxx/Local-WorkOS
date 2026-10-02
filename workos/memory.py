@@ -101,6 +101,53 @@ def sanitize(text):
     return '\n'.join(lines)
 
 
+def safe_upload_source(source_ref: str):
+    """Accept only a browser-supplied relative path; reject secret/archive trees."""
+    if not isinstance(source_ref, str) or not source_ref.strip() or len(source_ref) > 1000 or "\x00" in source_ref:
+        raise ValueError('记忆来源路径不正确')
+    normalized = source_ref.replace('\\', '/')
+    parts = normalized.split('/')
+    if (normalized.startswith('/') or re.match(r'^[A-Za-z]:', normalized)
+            or any(part in ('', '.', '..') for part in parts)
+            or any(_excluded(part) for part in parts)):
+        raise ValueError('记忆路径包含绝对路径、隐藏目录、凭证或归档位置')
+    return '/'.join(parts)
+
+
+def import_uploaded_memory(store, parsed, filename, source_ref):
+    """Store a user-selected file as a local, redacted, non-exportable memory item."""
+    from .engine import chunk_text
+    source = safe_upload_source(source_ref)
+    pages = parsed.get('pages') if isinstance(parsed, dict) else None
+    clean_pages = None
+    if isinstance(pages, list) and pages:
+        clean_pages = []
+        for page in pages:
+            if not isinstance(page, dict) or not isinstance(page.get('text'), str):
+                raise ValueError('记忆文件页码结构不正确')
+            clean_pages.append({**page, 'text': sanitize(page['text'])})
+        content = '\n\n'.join(page['text'] for page in clean_pages)
+    else:
+        content = sanitize(parsed.get('content', '') if isinstance(parsed, dict) else '')
+    if not content.strip():
+        raise ValueError('没有提取到可导入的文字')
+    if len(content.encode('utf-8')) > MAX_BYTES:
+        raise ValueError('记忆文本超过2MB限制')
+    digest = hashlib.sha256(content.encode('utf-8')).hexdigest()
+    existing = next((item for item in store.list('documents')
+                     if item.get('kind') == 'memory' and item.get('source_ref') == source), None)
+    if existing and existing.get('hash') == digest:
+        return {**existing, 'unchanged': True}
+    data = {'title': Path(filename).stem[:200] or '记忆文件', 'kind': 'memory',
+            'category': category(source), 'source_ref': source, 'content': content,
+            'filename': Path(filename).name, 'private': True,
+            'page_count': parsed.get('page_count') if isinstance(parsed, dict) else 1,
+            'hash': digest, 'chunks': chunk_text(content, clean_pages)}
+    if existing:
+        return {**store.update('documents', existing['id'], data), 'updated': True}
+    return {**store.create('documents', data), 'imported': True}
+
+
 def import_memories(root, paths, store):
     from .engine import chunk_text
     if not isinstance(paths, list) or not paths or len(paths) > 150:

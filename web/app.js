@@ -51,10 +51,10 @@
   };
   const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.file}</svg>`;
   const ROUTES = [
-    ['overview', '工作总览', 'OVERVIEW', 'grid'], ['projects', '公司与项目', 'PROJECTS', 'projects'],
-    ['research', '研究工作台', 'RESEARCH', 'research'], ['meetings', '会议中心', 'MEETINGS', 'meetings'],
-    ['tasks', '任务中心', 'TASKS', 'tasks'], ['memory', '知识与记忆', 'KNOWLEDGE', 'memory'],
-    ['finance', '回报测算', 'RETURN MODEL', 'finance'], ['deliverables', '交付中心', 'DELIVERABLES', 'deliverables'],
+    ['overview', '研究首页', 'RESEARCH HOME', 'grid'], ['projects', '项目库', 'PROJECTS', 'projects'],
+    ['research', '基本面研究', 'FUNDAMENTALS', 'research'], ['meetings', '会议与纪要', 'MEETINGS', 'meetings'],
+    ['tasks', '行动跟进', 'ACTIONS', 'tasks'], ['memory', '知识与记忆', 'KNOWLEDGE', 'memory'],
+    ['finance', '估值与回报模型', 'VALUATION', 'finance'], ['deliverables', '研究交付', 'DELIVERABLES', 'deliverables'],
     ['settings', '设置', 'SETTINGS', 'settings']
   ];
   const STAGES = ['线索', '初筛', '尽调', '投委会', '投后', '归档'];
@@ -62,6 +62,8 @@
   const STATUSES = ['待办', '进行中', '完成'];
   const NOTE_STATUSES = ['待核实', '已核实', '暂不采用'];
   const KINDS = ['研究简报', '会议纪要', '项目周报', '自定义'];
+  const VALUATION_METHODS = [['net_income', '净利润 × P/E'], ['ps', 'P/S（股权价值）'], ['dcf', 'DCF / FCFF'], ['lbo', 'LBO / Sponsor Returns']];
+  const VALUATION_LABELS = { currency: '币种', unit: '金额单位', period: '期间', net_income: '净利润', pe_multiple: 'P/E', diluted_shares: '稀释后股数', revenue: '收入', ps_multiple: 'P/S', net_debt: '净债务', valuation_date: '估值日', wacc: 'WACC', discount_timing: '折现时点', terminal_method: '终值方法', terminal_growth: '永续增长率', terminal_multiple: '退出倍数', minority_interest: '少数股东权益', entry_date: '进入日', exit_date: '退出日', entry_ev: '进入企业价值', entry_debt: '初始债务', entry_fees: '进入费用', minimum_cash: '最低现金', initial_cash: '初始现金', seller_rollover: '卖方滚存', exit_fees: '退出费用', exit_multiple: '退出倍数', tax_rate: '税率', interest_rate: '利率', mandatory_amortization: '强制偿还', cash_sweep_pct: '超额现金偿债比例', forecasts: '年度预测' };
   const FINANCE_DEFAULTS = Object.freeze({ revenue: 120, growth: .25, margin: .2, entry_multiple: 12, exit_multiple: 14, leverage: .35, years: 5, cash_conversion: .5, interest_rate: .06 });
   const FINANCE_FIELDS = [
     ['revenue', '起始收入', '百万元', 0.01, 1000000000, .01], ['growth', '收入年增长率', '%', -50, 100, .1],
@@ -72,12 +74,16 @@
   ];
   const PERCENT_FIELDS = new Set(['growth', 'margin', 'leverage', 'cash_conversion', 'interest_rate']);
   const LABELS = { projects: '项目', tasks: '任务', documents: '资料', meetings: '会议', notes: '研究结论', deliverables: '交付' };
+  const DSH_MODEL_IDS = new Set(['gpt-6-luna','gpt-6-sol','gpt-6-astra','gpt-5.6-luna','gpt-5.6-sol','gpt-5.6-terra','gpt-5.5']);
+  const LOCAL_MODEL_IDS = new Set(['deepseek-v4.1-flash','deepseek-v4-pro','deepseek-v3-2-volc','glm-5.2','kimi-k2.7','hy3','hunyuan-2.0-instruct']);
   const app = { workspace: 'personal', csrf: '', boot: null, data: null, page: 'overview', epoch: 0, modalBusy: false, mutations: 0, stopped: false, uploadBusy: false };
   const views = new Map();
   function freshView() {
-    return { page: 'overview', projectStage: '全部', projectQuery: '', projectId: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceQuery: '', selectedSources: new Set(), answers: [], askMode: 'local', question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false };
+    return { page: 'overview', projectStage: '全部', projectQuery: '', projectId: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceQuery: '', selectedSources: new Set(), answers: [], askMode: 'deepseek', dshModel: loadDshModel(), localModel: loadLocalModel(), agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentHistory: [], question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '', valuationModel: 'gpt-6-luna' };
   }
   function view() { if (!views.has(app.workspace)) views.set(app.workspace, freshView()); return views.get(app.workspace); }
+  function loadDshModel() { try { const model = localStorage.getItem('local-workos:dsh-model'); return DSH_MODEL_IDS.has(model) ? model : 'gpt-6-luna'; } catch { return 'gpt-6-luna'; } }
+  function loadLocalModel() { try { const model = localStorage.getItem('local-workos:local-model'); return LOCAL_MODEL_IDS.has(model) ? model : 'deepseek-v4.1-flash'; } catch { return 'deepseek-v4.1-flash'; } }
   function loadFinance() {
     try { const value = JSON.parse(localStorage.getItem(`local-workos:${app.workspace}:assumptions`) || 'null'); return { ...FINANCE_DEFAULTS, ...(value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key, number]) => key in FINANCE_DEFAULTS && Number.isFinite(number))) : {}) }; }
     catch { return { ...FINANCE_DEFAULTS }; }
@@ -99,6 +105,15 @@
   const percent = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? `${(Number(value) * 100).toFixed(1)}%` : '不可计算';
   const excerpt = (value, max = 120) => { const text = String(value || '').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; };
   const selectedAttr = (value, expected) => String(value ?? '') === String(expected ?? '') ? ' selected' : '';
+  const localModelOptions = (mode, current) => {
+    const presets = app.boot?.ai?.presets || [];
+    const preset = presets.find(item => item.id === (mode === 'deepseek' ? 'deepseek' : 'local'));
+    const models = preset?.models || [];
+    const fallback = mode === 'deepseek' ? [['deepseek-v4.1-flash', 'DeepSeek V4.1 Flash · 最快最省'], ['deepseek-v4-pro', 'DeepSeek V4 Pro · 重活']] : [['glm-5.2', 'GLM-5.2'], ['kimi-k2.7', 'Kimi K2.7'], ['hy3', 'Hunyuan 3']];
+    const items = models.length ? models.map(item => [item.id, item.name]) : fallback;
+    return items.map(([id, name]) => `<option value="${esc(id)}"${selectedAttr(id, current)}>${esc(name)}</option>`).join('');
+  };
+  const dshModelOptions = current => (app.boot?.dsh?.models || []).map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, current)}>${esc(item.name)}</option>`).join('');
   const options = (values, selected) => values.map(value => `<option value="${esc(value)}"${selectedAttr(value, selected)}>${esc(value)}</option>`).join('');
   const projectOptions = selected => `<option value="">不关联项目</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}`;
   const projectFilter = (id, selected, label = '全部项目') => `<select id="${esc(id)}" class="compact-select" aria-label="按项目筛选"><option value="">${esc(label)}</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}</select>`;
@@ -156,8 +171,8 @@
     finally { if (button?.isConnected) { button.disabled = false; button.innerHTML = original; } }
   }
   async function refreshData() {
-    const data = await api('/state');
-    app.data = data;
+    const [data, sync] = await Promise.all([api('/state'), api('/sync/status')]);
+    app.data = data; if (app.boot) app.boot.sync = sync;
     const available = new Set(list('documents').map(item => String(item.id)));
     view().selectedSources = new Set([...view().selectedSources].filter(id => available.has(String(id))));
     return data;
@@ -167,6 +182,7 @@
     try {
       app.boot = await api('/bootstrap');
       app.csrf = app.boot.csrf;
+      if (!app.boot.dsh?.available && view().askMode === 'dsh') view().askMode = 'local';
       if (!app.csrf) throw new Error('本地服务未返回安全令牌，请重启服务后重试。');
       await refreshData();
       const hash = location.hash.slice(1);
@@ -184,14 +200,14 @@
     const route = ROUTES.find(item => item[0] === app.page) || ROUTES[0];
     document.title = `${route[1]} · Local WorkOS`;
     const counts = { projects: list('projects').filter(item => item.stage !== '归档').length, tasks: list('tasks').filter(item => item.status !== '完成').length, deliverables: list('deliverables').length };
-    $('#primary-nav').innerHTML = ROUTES.filter(item => item[0] !== 'settings').map(([id, title, , symbol]) => `<button type="button" class="nav-item${app.page === id ? ' active' : ''}" data-page="${id}"${app.page === id ? ' aria-current="page"' : ''}>${icon(symbol)}<span>${title}</span>${counts[id] ? `<span class="nav-count">${counts[id]}</span>` : ''}</button>`).join('');
+    $('#primary-nav').innerHTML = ROUTES.filter(item => item[0] !== 'settings' && item[0] !== 'tasks').map(([id, title, , symbol]) => `<button type="button" class="nav-item${app.page === id ? ' active' : ''}" data-page="${id}"${app.page === id ? ' aria-current="page"' : ''}>${icon(symbol)}<span>${title}</span>${counts[id] ? `<span class="nav-count">${counts[id]}</span>` : ''}</button>`).join('');
     $('#settings-nav').className = `nav-item settings-nav${app.page === 'settings' ? ' active' : ''}`;
     $('#settings-nav').innerHTML = `${icon('settings')}<span>设置与连接</span>`;
     if (app.page === 'settings') $('#settings-nav').setAttribute('aria-current', 'page'); else $('#settings-nav').removeAttribute('aria-current');
     $('#workspace-switch').innerHTML = `<span class="workspace-icon">${icon(app.workspace === 'personal' ? 'user' : 'briefcase')}</span><span class="workspace-copy">${workspaceName()}<small>${app.workspace === 'personal' ? 'PERSONAL · 仅自己可见' : 'DEMO · 全部为合成数据'}</small></span>${icon('down')}`;
     $('#breadcrumb').innerHTML = `<span>${workspaceName()}</span><span class="slash">/</span><span class="current">${route[1]}</span>`;
     $('#footer-workspace').textContent = `${workspaceName()} · ${app.workspace === 'demo' ? '合成演示数据' : '本地存储'}`;
-    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.0';
+    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.3';
   }
   function render() {
     renderShell();
@@ -334,29 +350,52 @@
   }
 
   // PAGES
+  // AI-native command bar: one free-text box; the model picks the tools, code executes them.
+  function renderAgentBar() {
+    const state = view();
+    return '<section class="panel agent-panel"><div class="agent-head"><span class="quick-icon">' + icon('spark') + '</span><div><h2>直接说你要做什么</h2><small>例如“把这段访谈存成资料并列出三条待核实”“新建一个项目叫××”“搜一下所有提到毛利的地方”</small></div></div><form id="agent-form" class="agent-form"><textarea id="agent-input" rows="3" maxlength="8000" placeholder="用一句话说清任务；可以先把文本粘进来，再说“存成资料”。">' + esc(state.agentMessage) + '</textarea><div class="agent-actions"><select id="agent-model" aria-label="助手模型">' + localModelOptions('deepseek', state.localModel) + '</select><label class="agent-toggle"><input type="checkbox" id="agent-project-scope" ' + (state.researchProject ? 'checked' : '') + '>关联当前项目</label><button type="submit" class="button primary" ' + (state.agentBusy ? 'disabled' : '') + '>' + (state.agentBusy ? '<span class="spinner"></span>正在执行…' : icon('arrow') + '交给助手执行') + '</button></div></form>' +
+      (state.agentSteps.length ? '<div class="agent-steps">' + state.agentSteps.map(step => '<div class="agent-step"><span class="tag green">' + esc(step.action) + '</span><span>' + esc(step.say || '') + '</span><code>' + esc(JSON.stringify(step.result).slice(0, 180)) + '</code></div>').join('') + '</div>' : '') +
+      (state.agentAnswer ? '<div class="agent-answer">' + esc(state.agentAnswer) + '</div>' : '') + '</section>';
+  }
+  async function runAgent() {
+    const state = view(); if (state.agentBusy) return;
+    const message = ($('#agent-input')?.value || '').trim(); state.agentMessage = message;
+    if (!message) { notify('先说一句你要做什么。', true); return; }
+    const model = $('#agent-model')?.value || state.localModel || 'deepseek-v4.1-flash';
+    const projectId = $('#agent-project-scope')?.checked ? (state.researchProject || '') : '';
+    state.agentBusy = true; state.agentSteps = []; state.agentAnswer = ''; render();
+    try {
+      const result = await api('/agent', { body: { message, model_id: model, project_id: projectId, history: state.agentHistory } });
+      state.agentSteps = Array.isArray(result.steps) ? result.steps : [];
+      state.agentAnswer = result.answer || '';
+      state.agentHistory = [...state.agentHistory, { role: 'user', content: message }, { role: 'assistant', content: result.answer || '' }].slice(-8);
+      state.agentMessage = '';
+      if (state.agentSteps.length) await refreshData();
+    } catch (error) { if (error.name !== 'StaleRequestError') { state.agentAnswer = ''; showError(error); } }
+    finally { state.agentBusy = false; if (view() === state) render(); }
+  }
   function renderOverview() {
-    const projects = list('projects'); const tasks = list('tasks'); const documents = list('documents');
-    const openTasks = tasks.filter(item => item.status !== '完成');
-    const orderedTasks = [...openTasks].sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority)).slice(0, 5);
+    const projects = list('projects'); const documents = list('documents');
     const activeProjects = projects.filter(item => item.stage !== '归档');
     const researchCount = documents.filter(item => item.kind !== 'memory').length; const memoryCount = documents.filter(item => item.kind === 'memory').length;
     const pendingNotes = list('notes').filter(item => item.status === '待核实').length;
     const evidenceProjects = projects.filter(project => documents.some(doc => String(doc.project_id) === String(project.id))).length;
     const date = new Date(); const hour = date.getHours(); const greeting = hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 19 ? '下午好' : '晚上好';
     const metrics = [
-      ['在跟项目', activeProjects.length, `${projects.filter(item => item.stage === '尽调').length} 个进入尽调`, '项目进展，一目了然', 'projects'],
-      ['待办事项', openTasks.length, `${openTasks.filter(overdue).length} 项已逾期`, `${tasks.filter(item => item.status === '完成').length} 项已完成`, 'tasks'],
-      ['研究材料', researchCount, `${memoryCount} 条知识记忆`, `${pendingNotes} 条结论待核实`, 'research'],
-      ['已保存交付', list('deliverables').length, `${list('meetings').length} 场会议记录`, '沉淀可复用的工作成果', 'deliverables']
+      ['项目研究', activeProjects.length, evidenceProjects + ' / ' + projects.length + ' 个项目已关联证据', pendingNotes + ' 条结论待核实', 'projects'],
+      ['研究资料', researchCount, memoryCount + ' 条本地记忆', '来源与更新时间可追溯', 'research'],
+      ['会议纪要', list('meetings').length, '从讨论到行动', 'AI 草拟，人工确认', 'meetings'],
+      ['模型与交付', list('deliverables').length, '估值方法独立、公式可复核', 'Word / PPT / 模型在项目内沉淀', 'deliverables']
     ];
     return `<div class="overview-welcome"><div><div class="eyebrow">YOUR PERSONAL WORKSPACE</div><h1 class="welcome-title">${greeting}，研究员<span class="muted">。</span></h1><p class="welcome-sub">让信息有出处，让判断有依据，让每一步推进都有着落。</p></div><div class="date-card"><div class="day">${esc(date.toLocaleDateString('zh-CN', { weekday: 'long' }))}</div><div class="date">${esc(date.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }))}</div><span class="workspace-chip"><span class="status-dot"></span>${app.workspace === 'personal' ? '个人空间 · 本地优先' : '合成数据 · 演示空间'}</span></div></div>
       ${app.workspace === 'demo' ? `<div class="section-gap">${banner('', '当前为演示工作区，所有项目与材料均为合成示例，与个人数据完全隔离。', 'blue', 'info')}</div>` : ''}
+      ${renderAgentBar()}
       <div class="metric-grid">${metrics.map(([label, value, note, extra, symbol]) => `<div class="metric-card"><span class="metric-icon">${icon(symbol)}</span><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note"><b>${esc(note)}</b><br>${esc(extra)}</div></div>`).join('')}</div>
-      ${!projects.length && !documents.length && !tasks.length ? `<section class="onboarding"><span class="onboarding-mark">${icon('spark')}</span><div><h2>从一个项目，开启清晰的工作流</h2><p>创建项目 → 导入材料 → 形成判断 → 跟进行动。你的个人空间尚无业务记录。</p></div>${actionButton('创建第一个项目', 'create', 'plus', 'primary', 'data-collection="projects"')}</section>` : ''}
-      <div class="overview-grid"><section class="panel">${panelTitle('接下来，值得关注', 'tasks', '<button type="button" class="text-button" data-page="tasks">全部任务 ' + icon('arrow') + '</button>')}<div class="panel-body">${orderedTasks.length ? orderedTasks.map(task => `<div class="task-line"><button class="task-check" type="button" data-action="task-toggle" data-id="${esc(task.id)}" aria-label="完成任务：${esc(task.title)}"></button><div class="task-copy"><button type="button" class="task-title" data-action="edit" data-collection="tasks" data-id="${esc(task.id)}">${esc(task.title)}</button><div class="task-meta"><span>${esc(projectName(task.project_id))}</span><span>·</span>${badge(task.priority || '中')}<span>${esc(task.owner || '待分配')}</span></div></div><span class="task-date${overdue(task) ? ' overdue' : ''}">${task.due ? `${overdue(task) ? '逾期 · ' : ''}${esc(dateLabel(task.due))}` : '未定日期'}</span></div>`).join('') : empty('circleCheck', '当前没有待办事项', '把下一步写成任务，交给工作空间记住。', actionButton('新建任务', 'create', 'plus', 'small', 'data-collection="tasks"'), true)}</div></section>
-      <section class="panel">${panelTitle('项目推进', 'projects', '<button type="button" class="text-button" data-page="projects">查看项目 ' + icon('arrow') + '</button>')}<div class="panel-body">${STAGES.filter(stage => stage !== '归档').map(stage => { const count = projects.filter(item => item.stage === stage).length; return `<div class="progress-row"><span class="progress-name">${stage}</span><div class="progress-track"><div class="progress-fill" style="width:${activeProjects.length ? Math.round(count / activeProjects.length * 100) : 0}%"></div></div><span class="progress-value">${count}</span></div>`; }).join('')}<div class="pipeline-foot">${icon('link')}<span>${evidenceProjects} / ${projects.length} 个项目已关联证据材料 · ${pendingNotes} 条判断待核实</span></div></div></section></div>
+
+
       <div class="section-label"><h2>开始一段专注工作</h2><span>QUICK ACCESS</span></div><div class="quick-actions">${[
-        ['upload', '导入研究材料', '从证据开始，保留出处', 'research-import'], ['meetings', '记录一次会议', '从讨论到可确认的行动', 'new-meeting'], ['finance', '运行回报测算', '用假设检验投资逻辑', 'go-finance'], ['deliverables', '编写工作交付', '把判断沉淀为文档', 'new-deliverable']
+
+        ['spark', '直接说任务', '一句话让助手执行（新建、检索、存资料）', 'agent-focus'], ['upload', '导入研究材料', '点一下、或直接拖拽 / Ctrl+V', 'research-import'], ['meetings', '记录一次会议', '从讨论到可确认的行动', 'new-meeting'], ['finance', '建立估值模型', 'P/E、P/S、DCF 或 LBO', 'go-finance'], ['research', '用 GPT / DSH 提问', '引用证据，保存结论和下一步', 'research-ask']
       ].map(([symbol, label, text, action]) => `<button type="button" class="quick-action" data-action="${action}"><span class="quick-icon">${icon(symbol)}</span><span><b>${label}</b><small>${text}</small></span></button>`).join('')}</div>
       <div class="overview-grid mt-18"><section class="panel">${panelTitle('最近沉淀', 'book')}<div class="panel-body">${list('notes').length ? [...list('notes')].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 3).map(note => `<div class="task-line"><span class="quick-icon">${icon('quote')}</span><div class="task-copy"><button type="button" class="task-title" data-action="edit" data-collection="notes" data-id="${esc(note.id)}">${esc(note.title)}</button><div class="task-meta">${badge(note.status)}<span>${esc(projectName(note.project_id))}</span></div></div></div>`).join('') : empty('book', '好的判断，值得留存', '在研究工作台保存有出处的结论，构建自己的判断记录。', '', true)}</div></section><section class="panel">${panelTitle('工作动态', 'clock')}<div class="activity-list">${list('activity').length ? list('activity').slice(0, 4).map(item => `<div class="activity-line"><span class="activity-dot"></span><span class="activity-copy">${esc(item.message || item.description || item.title || item.action || '工作空间已更新')}</span><time>${esc(dateLabel(item.created_at || item.time, true))}</time></div>`).join('') : empty('clock', '工作，从这里开始', '这里记录业务变更，不记录文件打开历史。', '', true)}</div></section></div>`;
   }
@@ -393,20 +432,22 @@
   function renderResearch() {
     const state = view(); const sources = filteredSources();
     const selected = list('documents').filter(doc => state.selectedSources.has(String(doc.id)));
+    const dshAvailable = Boolean(app.boot?.dsh?.available);
     const notes = list('notes').filter(note => !state.researchProject || String(note.project_id) === state.researchProject);
     const memorySelected = selected.some(doc => doc.kind === 'memory');
-    return heading('研究工作台', 'EVIDENCE BEFORE OPINION', '先选材料，再提问题。每一条回答，都可以回到原文。', actionButton('新建研究结论', 'create', 'plus', '', 'data-collection="notes"') + actionButton('导入材料', 'upload', 'upload', 'primary', app.uploadBusy ? 'disabled' : '')) +
+    return heading('研究工作台', 'EVIDENCE BEFORE OPINION', '选项目资料、点一键提纲或直接提问；GPT / DSH 回答保留出处并可转为结论与行动。', actionButton('新建研究结论', 'create', 'plus', '', 'data-collection="notes"') + actionButton('导入材料', 'upload', 'upload', 'primary', app.uploadBusy ? 'disabled' : '')) +
       `<div class="toolbar"><div class="toolbar-group">${projectFilter('research-project', state.researchProject)}<span class="small muted">${list('documents').length} 份可用资料 · ${notes.length} 条研究结论</span></div></div>
+      ${renderAgentBar()}
       ${app.uploadBusy ? '<div class="file-progress"><span class="spinner"></span>正在解析并导入文件，请稍候…</div>' : ''}
-      <div class="research-layout"><section class="panel source-panel">${panelTitle('证据材料', 'file', `<span class="count-pill">${sources.length}</span>`)}<div class="panel-body" style="padding:0 16px 13px">${searchInput('source-search', '搜索材料标题', state.sourceQuery)}</div><div class="sources-toolbar"><label><input type="checkbox" id="source-select-all" ${sources.length && sources.every(doc => state.selectedSources.has(String(doc.id))) ? 'checked' : ''} ${!sources.length ? 'disabled' : ''}>选中筛选结果</label><span>已选 ${selected.length} 份</span></div><div class="source-list">${sources.length ? sources.map(doc => `<div class="source-row${state.selectedSources.has(String(doc.id)) ? ' selected' : ''}"><input type="checkbox" data-source-id="${esc(doc.id)}" aria-label="选择材料：${esc(doc.title)}" ${state.selectedSources.has(String(doc.id)) ? 'checked' : ''}><div class="source-info"><button type="button" class="source-name" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><div class="source-meta"><span>${doc.kind === 'memory' ? '记忆 · 仅本地' : esc(doc.category || '研究材料')}</span><span>${doc.page_count ? `${esc(doc.page_count)} 页` : esc(doc.filename?.split('.').pop()?.toUpperCase() || '纯文本')}</span></div></div></div>`).join('') : empty('file', '还没有证据材料', '导入 TXT / MD / PDF / DOCX，或直接粘贴原文。扫描 PDF 暂不支持 OCR。', '', true)}</div><div class="source-footer">${actionButton('粘贴原文', 'create', 'plus', 'small', 'data-collection="documents"')}${actionButton('导入文件', 'upload', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}</div></section>
-      <div class="stack"><section class="panel question-panel"><div class="question-heading"><span class="question-icon">${icon('research')}</span><div><h2>围绕选定证据，提出你的问题</h2><small>本地引擎为确定性检索与原文摘录，不是大模型。</small></div></div><form id="ask-form"><div class="question-box"><label for="question-input" class="sr-only">研究问题</label><textarea id="question-input" name="question" required maxlength="8000" placeholder="例如：这些材料如何描述收入增长的主要驱动？有哪些信息尚待核实？" ${state.asking ? 'disabled' : ''}>${esc(state.question)}</textarea><div class="question-bottom"><select id="ask-mode" aria-label="回答引擎" ${state.asking ? 'disabled' : ''}><option value="local"${selectedAttr('local', state.askMode)}>本地检索 · 无外发</option><option value="model"${selectedAttr('model', state.askMode)}>可选模型 · 需本次授权</option></select><button type="submit" class="button primary" ${state.asking ? 'disabled' : ''}>${state.asking ? '<span class="spinner"></span>正在查阅…' : icon('arrow') + '查阅选定材料'}</button></div></div><div class="source-scope"><span>本次范围：</span>${selected.length ? selected.map(doc => `<span class="tag ${doc.kind === 'memory' ? 'amber' : 'green'}">${esc(doc.title)}</span>`).join('') : '<span>请先在左侧明确选择材料，不会默认检索或发送全库。</span>'}</div>
-      ${state.askMode === 'model' ? `<div class="mt-12">${banner('外部模型 · 仅发送本次问题和选定研究材料', !app.boot?.ai?.configured ? '尚未配置模型连接，请先到设置填写兼容接口。' : `当前模型：${app.boot.ai.model || '已配置'}。你可在设置查看目标服务地址。`, 'amber', 'external')}</div>${memorySelected ? `<div class="mt-12">${banner('', '选中范围包含个人记忆。记忆禁止外发，只能本地检索；请改为本地模式，或取消记忆并使用单独脱敏的研究资料。', 'error', 'lock')}</div>` : ''}<label class="consent"><input type="checkbox" id="allow-external" ${memorySelected ? 'disabled' : ''}><span>我确认选中的研究资料已脱敏，允许<strong>仅本次请求</strong>将上方可见的选中范围和问题发送到已配置的外部模型。不发送未选资料与个人记忆。</span></label>` : ''}</form></section>
+      <div class="research-layout"><section class="panel source-panel">${panelTitle('证据材料', 'file', `<span class="count-pill">${sources.length}</span>`)}<div class="panel-body" style="padding:0 16px 13px">${searchInput('source-search', '搜索材料标题', state.sourceQuery)}</div><div class="sources-toolbar"><label><input type="checkbox" id="source-select-all" ${sources.length && sources.every(doc => state.selectedSources.has(String(doc.id))) ? 'checked' : ''} ${!sources.length ? 'disabled' : ''}>选中筛选结果</label><span>已选 ${selected.length} 份</span></div><div class="source-list">${sources.length ? sources.map(doc => `<div class="source-row${state.selectedSources.has(String(doc.id)) ? ' selected' : ''}"><input type="checkbox" data-source-id="${esc(doc.id)}" aria-label="选择材料：${esc(doc.title)}" ${state.selectedSources.has(String(doc.id)) ? 'checked' : ''}><div class="source-info"><button type="button" class="source-name" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><div class="source-meta"><span>${doc.kind === 'memory' ? '记忆 · 仅本地' : esc(doc.category || '研究材料')}</span><span>${doc.page_count ? `${esc(doc.page_count)} 页` : esc(doc.filename?.split('.').pop()?.toUpperCase() || '纯文本')}</span></div></div></div>`).join('') : empty('file', '还没有证据材料', '导入 TXT / MD / PDF / DOCX，或直接粘贴原文。扫描 PDF 暂不支持 OCR。', '', true)}</div><div class="source-footer">${actionButton('粘贴导入', 'paste-import', 'plus', 'small', app.uploadBusy ? 'disabled' : '')}${actionButton('导入文件', 'upload', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}</div></section>
+      <div class="stack"><section class="panel question-panel"><div class="question-heading"><span class="question-icon">${icon('research')}</span><div><h2>围绕选定证据，提出你的问题</h2><small>上传资料或选中项目材料，再点速览、尽调缺口等模板；GPT / DSH 会返回可定位的原文引用。</small></div></div><div class="row wrap mt-12" aria-label="常用研究任务"><button type="button" class="button small soft" data-action="research-template" data-template="brief">项目速览</button><button type="button" class="button small soft" data-action="research-template" data-template="gaps">尽调缺口</button><button type="button" class="button small soft" data-action="research-template" data-template="compare">口径差异</button></div><form id="ask-form"><div class="question-box"><label for="question-input" class="sr-only">研究问题</label><textarea id="question-input" name="question" required maxlength="8000" placeholder="例如：这些材料如何描述收入增长的主要驱动？有哪些信息尚待核实？" ${state.asking ? 'disabled' : ''}>${esc(state.question)}</textarea><div class="question-bottom"><select id="ask-mode" aria-label="回答引擎" ${state.asking ? 'disabled' : ''}><option value="deepseek"${selectedAttr('deepseek', state.askMode)}>DeepSeek · 快</option><option value="local"${selectedAttr('local', state.askMode)}>本地检索 · 无外发</option><option value="local-models"${selectedAttr('local-models', state.askMode)}>GLM / Kimi / 混元</option><option value="dsh" ${!dshAvailable ? 'disabled' : ''}${selectedAttr('dsh', state.askMode)}>GPT · DSH（贵）</option></select>${state.askMode === 'dsh' ? '<select id="dsh-model" aria-label="GPT 模型">' + dshModelOptions(state.dshModel) + '</select>' : ''}${(state.askMode === 'deepseek' || state.askMode === 'local-models') ? '<select id="local-model" aria-label="本机模型">' + localModelOptions(state.askMode, state.localModel) + '</select>' : ''}<button type="submit" class="button primary" ${state.asking ? 'disabled' : ''}>${state.asking ? '<span class="spinner"></span>正在查阅…' : icon('arrow') + '查阅选定材料'}</button></div></div><div class="source-scope"><span>本次范围：</span>${selected.length ? selected.map(doc => `<span class="tag ${doc.kind === 'memory' ? 'amber' : 'green'}">${esc(doc.title)}</span>`).join('') : '<span>请先在左侧明确选择材料，不会默认检索或发送全库。</span>'}</div>
+      ${state.askMode !== 'local' ? `<div class="mt-12">${banner(state.askMode === 'dsh' ? 'ChatGPT via DSH' : '其他外部模型', state.askMode === 'dsh' ? (app.boot?.dsh?.available ? `本机 DSH 已就绪 · ${(app.boot.dsh.models || []).find(item => item.id === view().dshModel)?.name || 'GPT-6 Luna'}；密钥由 DSH 管理。` : '未检测到 DSH。') : (!app.boot?.ai?.configured ? '尚未配置模型连接，请先到设置填写兼容接口。' : `当前模型：${app.boot.ai.model || '已配置'}。`), state.askMode === 'dsh' ? 'blue' : 'amber', 'external')}</div>${memorySelected ? `<div class="mt-12">${banner('', '选中范围含个人记忆。记忆只做本地检索；请切换“本地检索”，或取消记忆来源。', 'amber', 'lock')}</div>` : ''}<p class="inline-note">点“查阅选定材料”直接按左侧已勾选范围提问；不发送未选资料与个人记忆。</p>` : ''}</form></section>
       ${state.answers.length ? state.answers.map((answer, index) => renderAnswer(answer, index)).join('') : `<section class="panel">${empty('quote', '从有出处的回答开始', '选中一份或多份资料。本地检索会给出原文摘录，点击引用可定位页码或段落；没有证据时不会补写事实。', '', true)}</section>`}
       <section class="panel">${panelTitle('研究结论', 'book', actionButton('新建结论', 'create', 'plus', 'small ghost', 'data-collection="notes"'))}${notes.length ? notes.map(note => `<article class="note-item"><div class="row between"><h3 class="notes-title">${esc(note.title)}</h3>${badge(note.status)}</div><p class="note-body">${esc(note.body)}</p>${note.source_quote ? `<div class="note-quote">${esc(note.source_quote)}</div>` : ''}<div class="row wrap"><span class="tiny muted">${esc(projectName(note.project_id))}</span><span class="spacer"></span>${note.document_id ? actionButton('查看证据', 'note-source', 'quote', 'small ghost', `data-id="${esc(note.id)}"`) : ''}${actionButton('编辑 / 核实', 'edit', 'edit', 'small ghost', `data-collection="notes" data-id="${esc(note.id)}"`)}${actionButton('转为交付', 'note-deliverable', 'deliverables', 'small soft', `data-id="${esc(note.id)}"`)}</div></article>`).join('') : empty('book', '先留存结论，再持续核实', '问答可保存为研究结论，也可手动记录判断、证据与核实状态。', '', true)}</section></div></div>`;
   }
   function renderAnswer(answer, index) {
     const citations = Array.isArray(answer.citations) ? answer.citations : [];
-    return `<article class="panel answer-card"><div class="answer-heading"><span>${answer.mode === 'model' ? '外部模型回答 · 需自行核验' : '本地证据摘录 · 非大模型'}</span><span>${Number.isFinite(Number(answer.elapsed_ms)) ? `${number(answer.elapsed_ms)} ms` : ''}</span></div><div class="question-history">${esc(answer.question)}</div><div class="answer-text">${esc(answer.answer)}</div>${answer.warning ? `<div class="mt-12">${banner('', answer.warning, 'amber', 'info')}</div>` : ''}<div class="citation-grid">${citations.map((citation, citationIndex) => `<button type="button" class="citation" data-action="citation" data-answer="${index}" data-citation="${citationIndex}"><span class="citation-number">${citationIndex + 1}</span><div><strong>${esc(citation.title)} · ${citation.page != null ? `第 ${esc(citation.page)} 页 · ` : ''}第 ${esc(citation.ordinal ?? citationIndex + 1)} 段</strong><p>${esc(citation.quote)}</p></div></button>`).join('')}</div><div class="answer-footer"><span class="tiny muted spacer">${citations.length} 处可定位引用</span>${actionButton('保存为研究结论', 'answer-note', 'book', 'small soft', `data-index="${index}"`)}</div></article>`;
+    return `<article class="panel answer-card"><div class="answer-heading"><span>${answer.mode === 'dsh' ? `${esc(answer.model || 'GPT via DSH')} · 草稿需核验` : answer.mode === 'model' ? '外部模型回答 · 需自行核验' : '本地证据摘录 · 非大模型'}</span><span>${Number.isFinite(Number(answer.elapsed_ms)) ? `${number(answer.elapsed_ms)} ms` : ''}</span></div><div class="question-history">${esc(answer.question)}</div><div class="answer-text">${esc(answer.answer)}</div>${answer.warning ? `<div class="mt-12">${banner('', answer.warning, 'amber', 'info')}</div>` : ''}<div class="citation-grid">${citations.map((citation, citationIndex) => `<button type="button" class="citation" data-action="citation" data-answer="${index}" data-citation="${citationIndex}"><span class="citation-number">${citationIndex + 1}</span><div><strong>${esc(citation.title)} · ${citation.page != null ? `第 ${esc(citation.page)} 页 · ` : ''}第 ${esc(citation.ordinal ?? citationIndex + 1)} 段</strong><p>${esc(citation.quote)}</p></div></button>`).join('')}</div><div class="answer-footer"><span class="tiny muted spacer">${citations.length} 处可定位引用</span>${actionButton('保存为研究结论', 'answer-note', 'book', 'small soft', `data-index="${index}"`)}</div></article>`;
   }
   async function askQuestion() {
     const state = view(); if (state.asking) return;
@@ -415,39 +456,107 @@
     const ids = [...state.selectedSources];
     if (!ids.length) { notify('请先明确选中至少一份资料。', true); return; }
     const mode = $('#ask-mode').value;
-    const allowExternal = mode === 'model' && Boolean($('#allow-external')?.checked);
-    if (mode === 'model') {
-      if (ids.some(id => record('documents', id)?.kind === 'memory')) { notify('个人记忆禁止外发，请切换本地检索或取消记忆来源。', true); return; }
-      if (!app.boot?.ai?.configured) { notify('请先在设置中配置可选模型。', true); return; }
-      if (!allowExternal) { notify('外部模型需要你勾选“仅本次请求”外发授权。', true); return; }
+    const allowExternal = mode !== 'local'; // Selection itself is the scope; no per-request consent gate.
+    const modelId = mode === 'dsh' ? ($('#dsh-model')?.value || state.dshModel || 'gpt-6-luna') : (mode === 'deepseek' || mode === 'local-models') ? ($('#local-model')?.value || state.localModel || 'deepseek-v4.1-flash') : '';
+    if (mode !== 'local') {
+      if (ids.some(id => record('documents', id)?.kind === 'memory')) { notify('个人记忆只做本地检索：请改用“本地检索”，或取消记忆来源。', true); return; }
+      if (mode === 'dsh' && !app.boot?.dsh?.available) { notify('没有检测到本机 DSH，请检查 DSH 安装。', true); return; }
+      if (mode === 'model' && !app.boot?.ai?.configured) { notify('请先在设置中配置可选模型。', true); return; }
     }
     const projectId = state.researchProject || '';
     state.asking = true; render();
     try {
-      const response = await api('/ask', { body: { question, project_id: projectId, document_ids: ids, mode, allow_external: allowExternal } });
+      const response = await api('/ask', { body: { question, project_id: projectId, document_ids: ids, mode, model_id: modelId, allow_external: allowExternal } });
       state.answers.unshift({ ...response, question, project_id: projectId }); state.answers = state.answers.slice(0, 8);
     } catch (error) { showError(error); }
     finally { state.asking = false; if (view() === state && app.page === 'research') render(); }
   }
-  async function uploadFiles(files) {
+  function applyResearchTemplate(key) {
+    const prompts = {
+      brief: '请基于选中材料制作一页项目速览：项目/公司概况、核心判断、支持证据、主要风险、仍缺信息、下一步建议。逐项标注来源[S#]；资料没有写到的内容请标为未知。',
+      gaps: '请梳理选中材料反映的尽调缺口：待核实问题、为什么重要、目前已有证据[S#]、还需要向谁或哪份资料核实。不要把资料未提及误写成事实。',
+      compare: '请比对选中材料中对同一经营指标、日期、定义或交易条件的不同表述，整理为“事项｜来源A口径｜来源B口径｜差异是否可解释｜建议核实问题”，每个来源标注[S#]。不预设任何一方错误。'
+    };
+    const state = view(); const question = prompts[key]; if (!question) return;
+    if (!state.selectedSources.size) {
+      let candidates = filteredSources().filter(doc => doc.kind !== 'memory');
+      if (!state.researchProject && candidates.length > 5) candidates = [];
+      candidates.forEach(doc => state.selectedSources.add(String(doc.id)));
+    }
+    state.question = question;
+    const selected = list('documents').filter(doc => state.selectedSources.has(String(doc.id)));
+    state.askMode = selected.some(doc => doc.kind === 'memory') ? 'local' : (app.boot?.dsh?.available ? 'dsh' : 'local');
+    render();
+    if (!state.selectedSources.size) notify('先筛选项目或选择资料；为避免误发，不会默认选中全库。', true);
+    else notify('已准备 ' + state.selectedSources.size + ' 份资料和研究提纲，请核对范围后提交。');
+    requestAnimationFrame(() => $('#question-input')?.focus());
+  }
+  // Fast intake: paste or drop anywhere on the page and the content becomes a document.
+  function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = target.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+  }
+  function pastedName(text) {
+    const first = String(text || '').trim().split(/\r?\n/).find(line => line.trim());
+    return excerpt((first || '粘贴内容').replace(/[\\/:*?"<>|]/g, ' ').trim(), 40) || '粘贴内容';
+  }
+  async function importPastedText(text, label = '') {
+    const content = String(text || '').trim();
+    if (!content) { notify('剪贴板里没有可导入的文本。', true); return null; }
+    if (app.uploadBusy) return null;
+    const title = label || pastedName(content);
+    app.uploadBusy = true;
+    if (app.page === 'research' || app.page === 'memory') render();
+    try {
+      const doc = await api('/documents', { body: { title, kind: 'research', project_id: view().researchProject || '', source_ref: '粘贴导入', content, private: true } });
+      await refreshData();
+      if (app.page === 'research') view().selectedSources.add(String(doc.id));
+      notify('已作为资料“' + title + '”保存（' + content.length + ' 字），可直接勾选提问。');
+      return doc;
+    } catch (error) { showError(error); return null; }
+    finally { app.uploadBusy = false; if (app.page === 'research' || app.page === 'memory') render(); }
+  }
+  async function importClipboard() {
+    let text = '';
+    try { text = (await navigator.clipboard.readText()) || ''; } catch { notify('浏览器未授权读取剪贴板；请直接在页面按 Ctrl+V。', true); return; }
+    if (!text.trim()) { notify('剪贴板为空。', true); return; }
+    await importPastedText(text);
+  }
+  async function filesFromDataTransfer(transfer) {
+    const files = [...(transfer?.files || [])];
+    if (files.length) return { files, text: '' };
+    const text = transfer?.getData ? transfer.getData('text/plain') : '';
+    return { files: [], text };
+  }
+  async function uploadFiles(files, kind = 'research') {
     if (app.uploadBusy || !files.length) return;
-    app.uploadBusy = true; const state = view(); const projectId = state.researchProject || ''; const epoch = app.epoch;
-    if (app.page === 'research') render();
-    let imported = 0; let failed = 0;
+    if (kind === 'memory' && app.workspace !== 'personal') { notify('真实记忆只能导入个人工作区。', true); return; }
+    if (files.length > 150) { notify('一次最多导入150个文件；请分批选择。', true); return; }
+    if (files.reduce((sum, file) => sum + file.size, 0) > 200 * 1024 * 1024) { notify('所选文件合计超过200 MB；请分批导入。', true); return; }
+    app.uploadBusy = true; const state = view(); const projectId = kind === 'memory' ? '' : (state.researchProject || ''); const epoch = app.epoch;
+    if (app.page === 'research' || app.page === 'memory') render();
+    let imported = 0; let updated = 0; let unchanged = 0; let failed = 0;
     try {
       for (const file of files) {
         if (epoch !== app.epoch) throw new StaleRequestError();
-        if (!/\.(txt|md|pdf|docx)$/i.test(file.name)) { notify(`“${file.name}”格式不支持，请使用 TXT / MD / PDF / DOCX。`, true); failed++; continue; }
-        if (file.size > 12 * 1024 * 1024) { notify(`“${file.name}”超过 12 MB，未导入。`, true); failed++; continue; }
+        if (!/\.(txt|md|pdf|docx|pptx|xlsx|xlsm)$/i.test(file.name)) { notify(`“${file.name}”格式不支持，请使用 TXT / MD / PDF / DOCX / PPTX / XLSX / XLSM。`, true); failed++; continue; }
+        if (file.size > 20 * 1024 * 1024) { notify(`“${file.name}”超过 20 MB，未导入。`, true); failed++; continue; }
         try {
           const base64 = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(new Error(`无法读取“${file.name}”。`)); reader.readAsDataURL(file); });
-          const doc = await api('/upload', { body: { name: file.name, base64, project_id: projectId, kind: 'research' } });
-          if (doc.id) state.selectedSources.add(String(doc.id)); imported++;
+          const source = kind === 'memory' ? (file.webkitRelativePath || file.name) : file.name;
+          const doc = await api('/upload', { body: { name: file.name, base64, project_id: projectId, kind, source_ref: source } });
+          if (kind === 'research') { if (doc.id) state.selectedSources.add(String(doc.id)); imported++; }
+          else if (doc.unchanged) unchanged++;
+          else if (doc.updated) updated++;
+          else imported++;
         } catch (error) { if (error.name === 'StaleRequestError') throw error; failed++; showError(error); }
       }
-      if (imported) { await refreshData(); notify(`已导入 ${imported} 份资料${failed ? `，${failed} 份未导入` : ''}。`); }
+      if (kind === 'memory' && imported + updated + unchanged) { await refreshData(); notify('记忆导入完成：新增 ' + imported + '，更新 ' + updated + '，未变化 ' + unchanged + (failed ? '，失败 ' + failed : '') + '。仅保存在本机，源文件未修改。'); }
+      else if (kind === 'research' && imported) { await refreshData(); notify(`已导入 ${imported} 份资料${failed ? `，${failed} 份未导入` : ''}。`); }
+      else if (!imported && !updated && !unchanged && failed) notify('没有文件导入成功，请检查文件类型或大小。', true);
     } catch (error) { showError(error); }
-    finally { app.uploadBusy = false; $('#upload-input').value = ''; if (epoch === app.epoch) render(); }
+    finally { app.uploadBusy = false; $('#upload-input').value = ''; $('#memory-file-input').value = ''; $('#memory-folder-input').value = ''; if (epoch === app.epoch) render(); }
   }
   async function openDocument(id, citation = null) {
     const dialog = $('#document-dialog');
@@ -543,9 +652,10 @@
     const categories = ['全部', ...new Set(['偏好', '方法', '会话', ...memories.map(doc => doc.category).filter(Boolean)])];
     const query = state.memoryQuery.toLowerCase();
     const filtered = memories.filter(doc => (state.memoryCategory === '全部' || doc.category === state.memoryCategory) && `${doc.title} ${doc.source_ref} ${doc.category}`.toLowerCase().includes(query));
-    return heading('知识与记忆', 'YOUR KNOWLEDGE, CONNECTED', '把积累接入当下的工作，而不是再造一个信息孤岛。', actionButton('扫描当前记忆', 'memory-scan', 'refresh', 'primary')) +
-      `<div class="section-gap">${banner('只读导入 · 不改动原文件 · 记忆禁止外发', app.workspace === 'personal' ? '默认不扫描任何目录；仅扫描 WORKOS_MEMORY_ROOT 显式指定的 Markdown 文件夹，跳过凭证、机器环境与设备配置。保留来源、更新时间和内容指纹；已有副本按内容去重。记忆只允许本地检索。' : '当前展示合成记忆。扫描与导入真实记忆仅在个人工作区可用，不会将真实文件放进演示库。', '', 'lock')}</div>
-      <div class="toolbar"><div class="tabs" aria-label="按记忆分类筛选">${categories.map(category => `<button type="button" class="tab${state.memoryCategory === category ? ' active' : ''}" data-action="memory-category" data-value="${esc(category)}">${esc(category)}</button>`).join('')}</div>${searchInput('memory-search', '搜索标题、来源、分类', state.memoryQuery)}</div><div class="memory-grid">${filtered.map(doc => `<article class="panel memory-card"><div class="row between"><span class="quick-icon">${icon('memory')}</span>${badge(doc.category || '未分类', 'green')}</div><button type="button" class="memory-title mt-12" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><p class="memory-source">${esc(doc.source_ref || '合成演示来源')}</p><div class="row between"><span class="tiny muted">只读导入副本</span><button type="button" class="text-button tiny" data-action="document" data-id="${esc(doc.id)}">查看原文 ${icon('arrow')}</button></div><div class="memory-footer"><span>导入 / 更新 ${esc(dateLabel(doc.updated_at || doc.created_at, true))}</span>${iconButton('删除导入副本', 'delete', 'trash', `data-collection="documents" data-id="${esc(doc.id)}"`, 'danger')}</div></article>`).join('')}</div>${!filtered.length ? `<section class="panel">${empty('memory', memories.length ? '没有符合筛选的记忆' : '连接你已经积累的知识', memories.length ? '可调整分类或搜索词。全文内容可通过 Ctrl+K 搜索。' : '扫描只读取允许的文件列表。你可以查看路径、逐项选择后导入，原文件保持不变。', actionButton('扫描可导入记忆', 'memory-scan', 'refresh', 'primary'))}</section>` : ''}`;
+    const importActions = app.workspace === 'personal' ? actionButton('导入记忆文件', 'memory-upload-files', 'upload', 'primary', app.uploadBusy ? 'disabled' : '') + actionButton('导入文件夹', 'memory-upload-folder', 'upload', 'soft', app.uploadBusy ? 'disabled' : '') + (app.boot?.memory_root_available ? actionButton('扫描已配置目录', 'memory-scan', 'refresh', 'small soft', app.uploadBusy ? 'disabled' : '') : '') : '';
+    return heading('知识与记忆', 'YOUR KNOWLEDGE, CONNECTED', '把积累接入当下的工作，而不是再造一个信息孤岛。', importActions) +
+      `<div class="section-gap">${banner('只读导入 · 不改动原文件 · 记忆禁止外发', app.workspace === 'personal' ? (app.boot?.memory_root_available ? '你可以导入指定文件/文件夹；另已配置扫描根目录。仅个人本地保存，凭证、隐藏文件及归档目录会跳过或脱敏，记忆只允许本地检索。' : '默认不扫描磁盘，所以之前看起来不可用。现在可直接选记忆文件或整个文件夹导入；不用配置路径，源文件不修改，记忆不会发送给 GPT/DSH。') : '当前展示合成记忆。扫描与导入真实记忆仅在个人工作区可用，不会将真实文件放进演示库。', '', 'lock')}</div>
+      <div class="toolbar"><div class="tabs" aria-label="按记忆分类筛选">${categories.map(category => `<button type="button" class="tab${state.memoryCategory === category ? ' active' : ''}" data-action="memory-category" data-value="${esc(category)}">${esc(category)}</button>`).join('')}</div>${searchInput('memory-search', '搜索标题、来源、分类', state.memoryQuery)}</div><div class="memory-grid">${filtered.map(doc => `<article class="panel memory-card"><div class="row between"><span class="quick-icon">${icon('memory')}</span>${badge(doc.category || '未分类', 'green')}</div><button type="button" class="memory-title mt-12" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><p class="memory-source">${esc(doc.source_ref || '合成演示来源')}</p><div class="row between"><span class="tiny muted">只读导入副本</span><button type="button" class="text-button tiny" data-action="document" data-id="${esc(doc.id)}">查看原文 ${icon('arrow')}</button></div><div class="memory-footer"><span>导入 / 更新 ${esc(dateLabel(doc.updated_at || doc.created_at, true))}</span>${iconButton('删除导入副本', 'delete', 'trash', `data-collection="documents" data-id="${esc(doc.id)}"`, 'danger')}</div></article>`).join('')}</div>${!filtered.length ? `<section class="panel">${empty('memory', memories.length ? '没有符合筛选的记忆' : '连接你已经积累的知识', memories.length ? '可调整分类或搜索词。全文内容可通过 Ctrl+K 搜索。' : (app.workspace === 'personal' ? '选择 TXT、MD、PDF、DOCX、PPTX、XLSX 或 XLSM 文件，或一次选取整个文件夹。内容仅用于本地检索，原文件不修改，也不会外发。' : '演示空间仅展示合成记忆；切换到个人工作区后可导入自己的文件。'), app.workspace === 'personal' ? actionButton('选择记忆文件', 'memory-upload-files', 'upload', 'primary') + actionButton('选择文件夹', 'memory-upload-folder', 'upload', 'soft') : '')}</section>` : ''}`;
   }
   async function scanMemory(button) {
     if (app.workspace !== 'personal') { notify('真实记忆仅能导入个人工作区。请先切换到个人工作区。', true); return; }
@@ -565,6 +675,7 @@
   }
 
   function renderFinance() {
+    return window.LocalWorkOSValuation.render({ state: view(), boot: app.boot, helpers: { heading, actionButton, icon, banner, empty, esc, projectOptions, selectedAttr, dshModelOptions, number, percent } });
     const state = view(); const result = state.financeResult;
     return heading('回报测算', 'ASSUMPTIONS, NOT PROMISES', '所有数字由本地代码计算。展示假设、公式与边界，不让模型代算。', actionButton('保存测算简报', 'finance-deliverable', 'deliverables', '', !result || state.financeDirty ? 'disabled title="请先用当前假设完成测算"' : '')) +
       `<div class="section-gap">${banner('简化权益回报模型 · 非完整 LBO', '单位：人民币百万元。不包含税务、营运资本明细、交易费用及完整债务契约；情景和敏感性不是收益承诺。现金流、IRR / MOIC 的定义请查看下方公式。', 'amber', 'info')}</div>
@@ -596,6 +707,43 @@
     finally { state.financePending = false; if (view() === state && app.page === 'finance') render(); }
   }
 
+  async function parseValuationAssumptions() {
+    const state = view(); if (state.valuationPending) return;
+    const text = $('#valuation-text')?.value.trim() || ''; state.valuationText = text;
+    if (!text) { notify('请先用自然语言描述交易和主要假设。', true); return; }
+    state.valuationPending = true; state.valuationError = ''; state.valuationResult = null; render();
+    try {
+      const result = await api('/model/parse-assumptions', { body: { method: state.valuationMethod, text, model_id: state.valuationModel || 'gpt-6-luna', allow_external: true } });
+      state.valuationProposal = result; state.valuationJson = JSON.stringify(result.assumptions || {}, null, 2);
+    } catch (error) { if (error.name !== 'StaleRequestError') state.valuationError = error.message; }
+    finally { state.valuationPending = false; if (view() === state && app.page === 'finance') render(); }
+  }
+  async function calculateValuation() {
+    const state = view(); if (state.valuationPending) return;
+    const text = $('#valuation-json')?.value || state.valuationJson;
+    let assumptions;
+    try { assumptions = JSON.parse(text || '{}'); }
+    catch { notify('结构化假设 JSON 格式不正确。', true); return; }
+    state.valuationJson = text; state.valuationPending = true; state.valuationError = ''; state.valuationResult = null; render();
+    try { state.valuationResult = await api('/model/valuation', { body: { method: state.valuationMethod, assumptions } }); state.valuationAssumptions = assumptions; }
+    catch (error) { if (error.name !== 'StaleRequestError') state.valuationError = error.message; }
+    finally { state.valuationPending = false; if (view() === state && app.page === 'finance') render(); }
+  }
+  async function saveValuation() {
+    const state = view(); if (!state.valuationResult || !state.valuationAssumptions) return;
+    const result = state.valuationResult; const assumptions = state.valuationAssumptions;
+    const body = ['# '+result.method_label, '', '## 假设（用户确认）', 'JSON:', JSON.stringify(assumptions, null, 2), '', '## 计算结果', 'JSON:', JSON.stringify(result, null, 2), '', '> 模型计算为确定性输出；源假设需回到项目资料核实。'].join('\n');
+    const title = result.method_label + ' · ' + today();
+    await withBusy($('[data-action="valuation-save"]'), '正在保存…', async () => {
+      await api('/deliverables', { body: { title, kind: '自定义', project_id: state.valuationProjectId || '', body } });
+      await refreshData(); notify('模型快照已保存到交付中心。');
+    });
+  }
+  function loadValuationTemplate() {
+    const state = view(); const templates = window.LocalWorkOSValuation?.templates || {};
+    state.valuationText = templates[state.valuationMethod] || ''; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationError = '';
+    render(); requestAnimationFrame(() => $('#valuation-text')?.focus());
+  }
   function renderDeliverables() {
     const state = view(); const items = [...list('deliverables')].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
     if (!items.some(item => String(item.id) === String(state.deliverableId))) state.deliverableId = items[0]?.id || '';
@@ -652,13 +800,15 @@
     finally { $('#restore-input').value = ''; }
   }
   function renderSettings() {
-    const ai = app.boot?.ai || {};
+    const ai = app.boot?.ai || {}; const sync = app.boot?.sync || {}; const personalSync = sync.workspaces?.personal || {};
     return heading('设置与连接', 'LOCAL BY DEFAULT', '工作区、可选模型与数据安全，在这里保持透明。') +
       `<div class="settings-grid"><div class="stack"><section class="panel settings-section"><h2>你的工作区</h2><p>默认打开个人空间。演示仅包含合成记录；两套本地数据库完全隔离。</p><div class="mode-options">${[['personal', '个人工作区', '我的项目、资料与稳定记忆', 'user'], ['demo', '演示工作区', '合成示例，可安全体验完整流程', 'briefcase']].map(([mode, title, text, symbol]) => `<button type="button" class="mode-card${app.workspace === mode ? ' active' : ''}" data-action="workspace" data-workspace="${mode}" aria-pressed="${app.workspace === mode}">${icon(symbol)}<strong>${title}${app.workspace === mode ? ' · 当前' : ''}</strong><small>${text}</small></button>`).join('')}</div></section>
-      <section class="panel settings-section"><h2>可选模型连接</h2><p>兼容 OpenAI 的模型接口。保存配置不会测试网络，也不会自动发送资料。不配置时，本地检索、规则纪要和财务测算仍可使用。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '未配置外部模型 · 当前离线工作'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('每次外发都需要你的明确授权', '仅研究页明确选中的非记忆资料可外发，且每次问答须重新勾选授权。请先脱敏。个人记忆永远只用于本地检索。', 'amber', 'shield')}</div></section></div>
-      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.0')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}</div></section>
+      <section class="panel settings-section"><h2>GPT / DSH 模型</h2><p>研究页默认通过本机 DSH 调用 ChatGPT，不用在 WorkOS 粘贴 API Key；OAuth 凭据留在 DSH。也可切换本地证据检索，或连接其他兼容模型。</p><div class="model-state"><span class="status-dot"></span>${app.boot?.dsh?.available ? `DSH 已接入 · 默认 ${esc((app.boot.dsh.models || []).find(item => item.id === app.boot.dsh.model)?.name || "GPT-6 Luna")}` : "未检测到 DSH；仍可使用本地检索或其他兼容模型。"}</div><p>每次外发前会显示范围并要求单次授权；只发送选中的证据片段，不发送个人记忆。</p><h3>其他兼容模型（可选）</h3><p>兼容 OpenAI Chat Completions。此配置仅在本次 WorkOS 服务进程内存，不保存密钥；连接需要由你自行配置。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '未配置外部模型 · 当前离线工作'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('每次外发都需要你的明确授权', '仅研究页明确选中的非记忆资料可外发，且每次问答须重新勾选授权。请先脱敏。个人记忆永远只用于本地检索。', 'amber', 'shield')}</div></section></div>
+      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.3')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}</div></section>
+      <section class="panel settings-section"><h2>OneDrive 项目文件同步</h2><p>主机是唯一写入端；项目元数据、已导入资料文本、会议/研究/交付记录和 JSON 快照会在保存时镜像到 OneDrive 的 AI Agent/Local WorkOS。活动中的 SQLite/WAL 保留在本机，避免 OneDrive 文件锁与并发同步损坏；其他设备可经远程入口使用同一主机。</p><div class="model-state"><span class="status-dot"></span>${sync.enabled ? (sync.error ? esc(sync.error) : '已配置 · ' + Number(personalSync.counts?.projects || 0) + ' 个项目 · ' + Number(personalSync.counts?.documents || 0) + ' 份资料') : '未配置 OneDrive 同步根目录'}</div><div class="mt-18">${actionButton('立即同步', 'sync-onedrive', 'refresh', 'small', !sync.enabled ? 'disabled' : '')}</div><p class="inline-note mt-12">OneDrive 是文件镜像和恢复层，不是实时多人数据库；不要手动替换活动中的 .sqlite3/WAL 文件。</p></section>
+
       <section class="panel settings-section"><h2>数据备份与恢复</h2><p>导出当前工作区的 JSON 备份，不包含 API Key。备份包含工作材料与记忆副本，请妥善保管。</p><div class="row wrap">${actionButton('导出当前备份', 'backup', 'download', 'soft')}${actionButton('选择备份恢复', 'restore', 'upload')}</div><p class="inline-note mt-18">恢复前校验格式、关联和大小；服务端先备份现有数据库，再事务替换当前工作区。不跨工作区恢复。</p></section>
-      <section class="panel settings-section"><h2>隐私边界</h2><p class="no-margin">默认无遥测、无云同步；不连接邮箱、微信、日历，不录音、不发邮件。记忆连接器不扫描凭证、浏览器配置、机器环境或设备配置。浏览器只与当前本地服务通信。</p></section>
+      <section class="panel settings-section"><h2>隐私边界</h2><p class="no-margin">无遥测；OneDrive 仅同步本地项目文件镜像与 JSON 快照，不同步活动 SQLite/WAL，也不发送记忆给模型。不连接邮箱、微信、日历，不录音、不发邮件。记忆连接器不扫描凭证、浏览器配置、机器环境或设备配置。</p></section>
       <section class="panel settings-section danger-zone"><h2>关闭本地服务</h2><p>仅停止 Local WorkOS 当前服务。数据保留，但页面将失去连接；再次使用需重新运行启动器。</p>${actionButton('关闭服务', 'shutdown', 'logout', 'danger small')}</section></div></div>`;
   }
   async function saveAISettings(form) {
@@ -749,6 +899,8 @@
     bindSelect('research-project', value => { view().researchProject = value; view().selectedSources.clear(); render(); });
     bindSelect('meeting-project', value => { captureMeetingDraft(); view().meetingProject = value; render(); });
     bindSelect('ask-mode', value => { view().askMode = value; render(); });
+    bindSelect('local-model', value => { view().localModel = value; try { localStorage.setItem('local-workos:local-model', value); } catch { /* Optional preference. */ } });
+    bindSelect('dsh-model', value => { view().dshModel = value; try { localStorage.setItem('local-workos:dsh-model', value); } catch { /* Selection is optional. */ } render(); });
     $('#question-input')?.addEventListener('input', event => { view().question = event.target.value; });
     $$('[data-source-id]').forEach(input => input.addEventListener('change', () => { if (input.checked) view().selectedSources.add(String(input.dataset.sourceId)); else view().selectedSources.delete(String(input.dataset.sourceId)); render(); }));
     $('#source-select-all')?.addEventListener('change', event => { filteredSources().forEach(doc => { if (event.target.checked) view().selectedSources.add(String(doc.id)); else view().selectedSources.delete(String(doc.id)); }); render(); });
@@ -757,7 +909,14 @@
       try { await api(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: select.value } }); await refreshData(); render(); notify('任务状态已更新。'); }
       catch (error) { select.value = previous; select.disabled = false; showError(error); }
     }));
+    bindSubmit('agent-form', runAgent);
+    $('#agent-input')?.addEventListener('input', event => { view().agentMessage = event.target.value; });
     bindSubmit('ask-form', askQuestion); bindSubmit('meeting-summary-form', saveMeetingSummary); bindSubmit('meeting-actions-form', createMeetingTasks); bindSubmit('finance-form', calculateFinance); bindSubmit('ai-settings-form', saveAISettings);
+    bindSelect('valuation-method', value => { const state = view(); state.valuationMethod = value; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationError = ''; render(); });
+    bindSelect('valuation-project', value => { view().valuationProjectId = value; });
+    bindSelect('valuation-model', value => { view().valuationModel = value; try { localStorage.setItem('local-workos:dsh-model', value); } catch { /* Optional preference. */ } });
+    $('#valuation-text')?.addEventListener('input', event => { const state = view(); state.valuationText = event.target.value; if (state.valuationProposal) { state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; $('.valuation-review')?.remove(); $('.valuation-result')?.remove(); } });
+    $('#valuation-json')?.addEventListener('input', event => { view().valuationJson = event.target.value; view().valuationResult = null; $('.valuation-result')?.remove(); });
     $('#meeting-summary')?.addEventListener('input', () => { captureMeetingDraft(); $('#meeting-save-state').textContent = '尚未保存，请保存纪要'; });
     $('#meeting-actions-form')?.addEventListener('input', captureMeetingDraft);
     bindSubmit('deliverable-form', async form => withBusy($('button[type="submit"]', form), '正在保存…', async () => { if (await saveDeliverable(form)) notify('交付修改已保存。'); }));
@@ -778,7 +937,6 @@
       view().financeDirty = true; persistFinance(); $('#finance-dirty-note').textContent = '假设已改变，右侧仍为上次结果。请重新运行测算。';
       const saveButton = $('[data-action="finance-deliverable"]'); if (saveButton) saveButton.disabled = true;
     });
-    if (app.page === 'finance' && !view().financeAutoStarted) { view().financeAutoStarted = true; queueMicrotask(() => { if (app.page === 'finance') calculateFinance(); }); }
   }
   function captureMeetingDraft() {
     const form = $('#meeting-summary-form'); if (!form) return;
@@ -809,8 +967,12 @@
       case 'project-deliverable': return deliverFromProject(id);
       case 'task-new-status': return editRecord('tasks', '', { status: button.dataset.status, project_id: view().taskProject });
       case 'task-toggle': return withBusy(button, '', async () => { const task = record('tasks', id); if (!task) return; await api(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: task.status === '完成' ? '待办' : '完成' } }); await refreshData(); render(); notify('任务已完成。'); });
+      case 'research-ask': return navigate('research');
+      case 'research-template': return applyResearchTemplate(button.dataset.template);
       case 'research-import': await navigate('research'); $('#upload-input').click(); return;
       case 'upload': if (!app.uploadBusy) $('#upload-input').click(); return;
+      case 'paste-import': return importClipboard();
+      case 'agent-focus': $('#agent-input')?.focus(); return;
       case 'new-meeting': await navigate('meetings'); return editRecord('meetings');
       case 'new-deliverable': await navigate('deliverables'); return editRecord('deliverables');
       case 'go-finance': return navigate('finance');
@@ -827,13 +989,20 @@
       case 'meeting-new-task': { const meeting = record('meetings', id); return editRecord('tasks', '', { meeting_id: id, project_id: meeting?.project_id || '' }); }
       case 'memory-category': view().memoryCategory = button.dataset.value; render(); return;
       case 'memory-scan': return scanMemory(button);
+      case 'memory-upload-files': if (app.workspace !== 'personal') { notify('真实记忆只能导入个人工作区。', true); return; } if (!app.uploadBusy) $('#memory-file-input').click(); return;
+      case 'memory-upload-folder': if (app.workspace !== 'personal') { notify('真实记忆只能导入个人工作区。', true); return; } if (!app.uploadBusy) $('#memory-folder-input').click(); return;
       case 'finance-reset': view().finance = { ...FINANCE_DEFAULTS }; view().financeDirty = true; persistFinance(); render(); return calculateFinance();
       case 'finance-deliverable': return deliverFromFinance();
+      case 'valuation-template': return loadValuationTemplate();
+      case 'valuation-parse': return parseValuationAssumptions();
+      case 'valuation-calculate': return calculateValuation();
+      case 'valuation-save': return saveValuation();
       case 'select-deliverable': if (String(view().deliverableId) === String(id)) return; if (!await canLeave()) return; view().deliverableDirty = false; view().deliverableId = id; render(); return;
       case 'export': return exportDeliverable(id, button.dataset.format, button);
       case 'backup': return withBusy(button, '正在备份…', () => download('/backup', `LocalWorkOS-${app.workspace}-${today()}.json`));
       case 'restore': $('#restore-input').click(); return;
       case 'refresh-status': return withBusy(button, '正在检查…', async () => { app.boot = await api('/bootstrap'); app.csrf = app.boot.csrf; await refreshData(); render(); notify('本地服务已连接，数据已刷新。'); });
+      case 'sync-onedrive': return withBusy(button, '正在同步…', async () => { const status = await api('/sync', { body: {} }); app.boot.sync = status; render(); if (status.error) notify(status.error, true); else notify('项目文件与 JSON 快照已同步到 OneDrive。'); });
       case 'shutdown': if (await confirmDialog('关闭 Local WorkOS 本地服务？', '数据仍保存在本机。页面将断开连接，再次使用需重新运行启动器。', '确认关闭服务', true)) { await api('/shutdown', { body: {} }); app.stopped = true; $('#main').innerHTML = `<section class="state-error"><h1>本地服务已关闭</h1><p>数据已保留。请重新运行 Local WorkOS 启动器，然后点击重新连接。</p>${actionButton('重新连接', 'retry', 'refresh', 'primary')}</section>`; $('#connection-label').textContent = '服务已关闭'; } return;
       case 'search-result': $('#search-dialog').close(); return openRecord(collection, id);
       case 'open-record': return openRecord(collection, id);
@@ -847,7 +1016,36 @@
     $('#search-trigger').addEventListener('click', openSearch);
     $('#workspace-switch').addEventListener('click', () => { if (app.data) workspaceDialog(); });
     $('#upload-input').addEventListener('change', event => uploadFiles([...event.target.files]));
+    $('#memory-file-input').addEventListener('change', event => uploadFiles([...event.target.files], 'memory'));
+    $('#memory-folder-input').addEventListener('change', event => uploadFiles([...event.target.files], 'memory'));
     $('#restore-input').addEventListener('change', event => restoreBackup(event.target.files[0]));
+    // Ctrl/Cmd+V anywhere outside a text field imports the clipboard as a research document.
+    document.addEventListener('paste', event => {
+      if (app.stopped || !app.data || isTypingTarget(event.target)) return;
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text.trim()) return;
+      event.preventDefault();
+      importPastedText(text);
+    });
+    // Drag and drop files (or pasted text) onto the window.
+    ['dragenter', 'dragover'].forEach(type => document.addEventListener(type, event => {
+      if (app.stopped || isTypingTarget(event.target)) return;
+      if (![...(event.dataTransfer?.types || [])].some(item => item === 'Files' || item === 'text/plain')) return;
+      event.preventDefault();
+      document.body.classList.add('drop-active');
+    }));
+    ['dragleave', 'dragend'].forEach(type => document.addEventListener(type, event => {
+      if (event.relatedTarget) return;
+      document.body.classList.remove('drop-active');
+    }));
+    document.addEventListener('drop', async event => {
+      document.body.classList.remove('drop-active');
+      if (app.stopped || !app.data || isTypingTarget(event.target)) return;
+      event.preventDefault();
+      const { files, text } = await filesFromDataTransfer(event.dataTransfer);
+      if (files.length) uploadFiles(files, app.page === 'memory' ? 'memory' : 'research');
+      else if (text.trim()) importPastedText(text);
+    });
     $('#modal').addEventListener('cancel', event => { if (app.modalBusy) event.preventDefault(); });
     $('#search-dialog').addEventListener('close', () => { clearTimeout(searchTimer); searchSequence++; });
     document.addEventListener('click', async event => {

@@ -99,7 +99,7 @@ class UploadTests(unittest.TestCase):
 
     def test_upload_size_limit(self):
         with mock.patch.object(engine, "MAX_UPLOAD_BYTES", 20):
-            with self.assertRaisesRegex(ValueError, "12MB"):
+            with self.assertRaisesRegex(ValueError, "20MB"):
                 parse_upload("x.txt", b"x" * 21)
 
     def test_docx_body_and_table_without_fabricated_pages(self):

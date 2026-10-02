@@ -148,6 +148,35 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/ask', {**body, 'mode': 'model'})[0], 400)
         self.assertEqual(self.request('POST', '/api/upload', {'name': 'bad.txt', 'base64': '!!!'})[0], 400)
 
+    def test_selected_memory_file_upload_is_redacted_local_and_deduplicated(self):
+        raw = ('个人记忆内容\nAPI_KEY=sk-' + '0123456789abcdef0123456789abcdef').encode('utf-8')
+        encoded = base64.b64encode(raw).decode('ascii')
+        body = {'name': 'profile.md', 'base64': encoded, 'kind': 'memory', 'source_ref': 'selected/knowledge/profile.md'}
+        status, doc = self.request('POST', '/api/upload', body)
+        self.assertEqual(status, 201, doc)
+        self.assertEqual(doc['kind'], 'memory')
+        self.assertTrue(doc['private'])
+        self.assertEqual(doc['source_ref'], 'selected/knowledge/profile.md')
+        self.assertNotIn('0123456789abcdef0123456789abcdef', doc['content'])
+        self.assertIn('含认证信息的原文行已隐藏', doc['content'])
+        status, same = self.request('POST', '/api/upload', body)
+        self.assertEqual(status, 201, same)
+        self.assertEqual(same['id'], doc['id'])
+        self.assertTrue(same['unchanged'])
+        revised = {'name': 'profile.md', 'base64': base64.b64encode('偏好已更新'.encode()).decode('ascii'), 'kind': 'memory', 'source_ref': body['source_ref']}
+        status, updated = self.request('POST', '/api/upload', revised)
+        self.assertEqual(status, 201, updated)
+        self.assertEqual(updated['id'], doc['id'])
+        self.assertTrue(updated['updated'])
+        for path in ('C:/Users/<user>/profile.md', '../credentials/key.md', 'folder/.env'):
+            self.assertEqual(self.request('POST', '/api/upload', {**body, 'source_ref': path})[0], 400)
+        self.assertEqual(self.request('POST', '/api/upload', body, workspace='demo')[0], 400)
+        self.app.dsh_available = True
+        with patch.object(self.app, 'dsh_answer') as invoke:
+            status, _ = self.request('POST', '/api/ask', {'question': '个人偏好是什么？', 'document_ids': [doc['id']], 'mode': 'dsh', 'allow_external': True})
+            self.assertEqual(status, 400)
+            invoke.assert_not_called()
+
     def test_memory_import_only_personal_and_temporary_allowlist(self):
         root = Path(self.tmp.name) / 'synthetic_memory'
         file = root / '知识库/memory/profile.md'
@@ -185,6 +214,71 @@ class ServerTests(unittest.TestCase):
                 status, result = self.request('POST', '/api/documents', {'title': '合成无效', 'content': content})
                 self.assertEqual(status, 400, result)
         self.assertEqual(self.request('GET', '/api/backup')[1]['data'], before)
+
+    def test_dsh_chat_requires_consent_and_uses_only_grounded_citations(self):
+        doc = self.create('documents', {'title': '合成 DSH 材料', 'content': '合成星河公司收入为100百万元，收入来自合成订单。'})
+        self.app.dsh_available = True
+        session_root = Path(self.tmp.name) / 'temporary-sessions'
+        overlay = self.app._dsh_overlay('gpt-6-luna', session_root)
+        self.assertIn('provider: openai-codex', overlay)
+        self.assertIn(json.dumps(str(session_root)), overlay)
+        self.assertIn('session-log-deepseek', overlay)
+        self.assertIn('model: gpt-6-luna', overlay)
+        self.assertIn('- id: tool-bash\n  disabled: true', overlay)
+        body = {'question': '星河收入是多少？', 'document_ids': [doc['id']], 'mode': 'dsh', 'model_id': 'gpt-6-luna'}
+        with patch.object(self.app, 'dsh_answer', return_value='合成结论：收入100百万元。[S1]') as invoke:
+            memory = self.create('documents', {'title': '合成记忆', 'kind': 'memory', 'content': '合成个人偏好'})
+            status, denied_memory = self.request('POST', '/api/ask', {**body, 'document_ids': [memory['id']]})
+            self.assertEqual(status, 400, denied_memory)
+            invoke.assert_not_called()
+            status, result = self.request('POST', '/api/ask', body)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result['mode'], 'dsh')
+        self.assertEqual(result['model'], 'GPT-6 Luna via DSH')
+        self.assertTrue(result['citations'])
+        self.assertIn('收入为100百万元', invoke.call_args.args[0])
+        self.assertIn('星河收入是多少', invoke.call_args.args[0])
+        self.assertEqual(invoke.call_args.args[1], 'gpt-6-luna')
+        self.assertEqual(self.request('POST', '/api/ask', {**body, 'model_id': 'arbitrary'})[0], 400)
+
+    def test_agent_endpoint_executes_tools_and_blocks_unknown_models(self):
+        actions = iter([json.dumps({'action': 'create_note', 'args': {'title': '助手结论', 'body': '合成内容'}, 'say': '保存结论'}),
+                        json.dumps({'action': 'final', 'answer': '已保存 1 条结论。'})])
+        with patch.object(self.app, 'ai_lock', __import__('threading').RLock()):
+            with patch('workos.agent.urllib.request.urlopen') as opened:
+                opened.return_value.__enter__.return_value.read.side_effect = lambda *_: json.dumps({'choices': [{'message': {'content': next(actions)}}]}).encode()
+                status, result = self.request('POST', '/api/agent', {'message': '存一条结论', 'model_id': 'deepseek-v4.1-flash'})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result['answer'], '已保存 1 条结论。')
+        self.assertEqual(result['steps'][0]['action'], 'create_note')
+        self.assertTrue(any(note['title'] == '助手结论' for note in self.request('GET', '/api/state')[1]['notes']))
+        self.assertEqual(self.request('POST', '/api/agent', {'message': 'hi', 'model_id': 'gpt-6-luna'})[0], 400)
+
+    def test_sync_status_and_manual_sync_are_safe_when_not_configured(self):
+        status, data = self.request('GET', '/api/sync/status')
+        self.assertEqual(status, 200, data)
+        self.assertFalse(data['enabled'])
+        status, result = self.request('POST', '/api/sync', {})
+        self.assertEqual(status, 200, result)
+        self.assertFalse(result['enabled'])
+        bootstrap = self.request('GET', '/api/bootstrap')[1]
+        self.assertFalse(bootstrap['sync']['enabled'])
+
+    def test_valuation_api_is_deterministic_and_nl_parse_runs_without_extra_prompts(self):
+        assumptions = {'currency': 'RMB', 'unit': '百万元', 'period': 'FY2025A', 'net_income': 100, 'pe_multiple': 12}
+        status, result = self.request('POST', '/api/model/valuation', {'method': 'net_income', 'assumptions': assumptions})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result['equity_value'], 1200)
+        self.app.dsh_available = True
+        proposal = {'assumptions': assumptions, 'clarifications': []}
+        with patch.object(self.app, 'dsh_answer', return_value=json.dumps(proposal, ensure_ascii=False)) as invoke:
+            body = {'method': 'net_income', 'text': 'FY2025净利润100百万元，P/E 12x', 'model_id': 'gpt-6-luna'}
+            status, parsed = self.request('POST', '/api/model/parse-assumptions', body)
+        self.assertEqual(status, 200, parsed)
+        self.assertEqual(parsed['assumptions'], assumptions)
+        self.assertEqual(parsed['missing'], [])
+        self.assertIn('确认', parsed['warning'])
+        self.assertEqual(invoke.call_args.args[1], 'gpt-6-luna')
 
     def test_api_key_never_echoed_backed_up_or_persisted(self):
         secret = 'synthetic-secret-never-real-12345'

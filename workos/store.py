@@ -14,7 +14,7 @@ COLLECTIONS = ('projects','tasks','documents','meetings','notes','deliverables',
 FIELDS = {
  'projects': {'name','sector','stage','priority','thesis','next_step','owner','valuation','tags'},
  'tasks': {'title','project_id','status','priority','owner','due','description','meeting_id'},
- 'documents': {'title','project_id','kind','category','source_ref','content','filename','private','page_count','hash','chunks'},
+ 'documents': {'title','project_id','kind','category','source_ref','content','filename','private','page_count','hash','chunks','attachment_ref','attachment_hash','attachment_name'},
  'meetings': {'title','project_id','date','participants','transcript','summary'},
  'notes': {'title','project_id','body','status','document_id','source_quote'},
  'deliverables': {'title','project_id','kind','body'},
@@ -31,7 +31,7 @@ ENUMS = {
 DEFAULTS = {
  'projects':dict(stage='线索',priority='中',sector='',thesis='',next_step='',owner='',valuation='',tags=''),
  'tasks':dict(status='待办',priority='中',project_id='',owner='',due='',description='',meeting_id=''),
- 'documents':dict(project_id='',kind='research',category='',source_ref='',content='',filename='',private=True,page_count=1,hash='',chunks=[]),
+ 'documents':dict(project_id='',kind='research',category='',source_ref='',content='',filename='',private=True,page_count=1,hash='',chunks=[],attachment_ref='',attachment_hash='',attachment_name=''),
  'meetings':dict(project_id='',date='',participants='',transcript='',summary=''),
  'notes':dict(project_id='',body='',status='待核实',document_id='',source_quote=''),
  'deliverables':dict(project_id='',kind='自定义',body=''),

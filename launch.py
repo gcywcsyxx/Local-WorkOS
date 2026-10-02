@@ -27,6 +27,16 @@ def healthy():
  try:return request('/api/health').get('app')=='local-workos'
  except (OSError,ValueError):return False
 
+def configure_sync_env(env):
+ if env.get('WORKOS_SYNC_ROOT'):return
+ one_drive=env.get('OneDriveCommercial') or env.get('OneDrive') or env.get('OneDriveConsumer')
+ if not one_drive:return
+ root=Path(one_drive)
+ try:candidates=[item for item in root.iterdir() if item.is_dir() and 'AI Agent' in item.name]
+ except OSError:return
+ agent_root=candidates[0] if len(candidates)==1 else (root/'AI Agent' if (root/'AI Agent').is_dir() else None)
+ if agent_root:env['WORKOS_SYNC_ROOT']=str(agent_root/'Local WorkOS')
+
 def notify(message):
  if os.name=='nt':
   import ctypes
@@ -45,6 +55,7 @@ def main():
   return 0
  if not healthy():
   env=dict(os.environ)
+  configure_sync_env(env)
   env['PYTHONPATH']=str(ROOT/'vendor')+os.pathsep+env.get('PYTHONPATH','')
   env['PYTHONDONTWRITEBYTECODE']='1'
   selected=shutil.which(args.python)
