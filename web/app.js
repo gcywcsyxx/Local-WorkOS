@@ -517,11 +517,10 @@
     } catch (error) { showError(error); return null; }
     finally { app.uploadBusy = false; if (app.page === 'research' || app.page === 'memory') render(); }
   }
-  async function importClipboard() {
-    let text = '';
-    try { text = (await navigator.clipboard.readText()) || ''; } catch { notify('浏览器未授权读取剪贴板；请直接在页面按 Ctrl+V。', true); return; }
-    if (!text.trim()) { notify('剪贴板为空。', true); return; }
-    await importPastedText(text);
+  function handlePastedText(text) {
+    const value=String(text||'').trim(); if(!value)return;
+    if(value.length>2_000_000){notify('粘贴文本超过2MB，分段导入更快。',true);return;}
+    importPastedText(value);
   }
   async function filesFromDataTransfer(transfer) {
     const files = [...(transfer?.files || [])];
@@ -593,17 +592,18 @@
     return heading('会议纪要', 'EXPERT CALL NOTES', '粘贴原文，'+modeLabel+' 自动整理成册，编辑后直接导出 Word / PDF。', actionButton('新建会议', 'create', 'plus', 'primary', 'data-collection="meetings"')) +
       `<div class="toolbar"><div class="toolbar-group">${projectFilter('meeting-project', state.meetingProject)}<span class="small muted">${meetings.length} 场会议</span></div></div>
       <div class="split-layout"><section class="panel">${panelTitle('会议记录', 'meetings')}<div class="record-list">${meetings.length ? meetings.map(item => `<button type="button" class="record-item${String(item.id) === String(state.meetingId) ? ' active' : ''}" data-action="select-meeting" data-id="${esc(item.id)}"><h3>${esc(item.title)}</h3><p>${esc(projectName(item.project_id))}</p><span class="record-date">${esc(item.date || '日期待补充')} · ${esc(item.participants || '参会人待补充')}</span></button>`).join('') : empty('meetings', '尚无会议记录', '粘贴逐字稿即可开始。', '', true)}</div></section>
-      <div>${meeting ? renderMeetingDetail(meeting) : `<section class="panel">${empty('meetings', '让会议形成可跟进的行动', '新建会议并粘贴逐字稿。规则引擎生成的是可编辑草稿，不会自动创建任务或作出承诺。', actionButton('记录第一场会议', 'create', 'plus', 'primary', 'data-collection="meetings"'))}</section>`}</div></div>`;
+      <div>${meeting ? renderMeetingDetail(meeting, {localModels, actionButton, iconButton, banner, esc, projectName, list}) : `<section class="panel">${empty('meetings', '让会议形成可跟进的行动', '新建会议并粘贴逐字稿。规则引擎生成的是可编辑草稿，不会自动创建任务或作出承诺。', actionButton('记录第一场会议', 'create', 'plus', 'primary', 'data-collection="meetings"'))}</section>`}</div></div>`;
   }
-  function renderMeetingDetail(meeting) {
-    const state=view();const draft=state.drafts.get(String(meeting.id));const relatedTasks=list('tasks').filter(task=>String(task.meeting_id)===String(meeting.id));
-    return '<section class="panel"><div class="meeting-header"><div><h2>'+esc(meeting.title)+'</h2><div class="meeting-meta"><span>'+esc(meeting.date||'日期未识别')+'</span><span>·</span><span>'+esc(projectName(meeting.project_id))+'</span><span>'+esc(meeting.participants||'')+'</span></div></div><div class="row">'+iconButton('编辑会议与逐字稿','edit','edit','data-collection="meetings" data-id="'+esc(meeting.id)+'"')+iconButton('删除会议','delete','trash','data-collection="meetings" data-id="'+esc(meeting.id)+'"','danger')+'</div></div><div class="meeting-body">'+
+  function renderMeetingDetail(meeting, h) {
+    const state=view();const draft=state.drafts.get(String(meeting.id));
+    const note=draft?.summary??meeting.summary??'';
+    const relatedTasks=list('tasks').filter(task=>String(task.meeting_id)===String(meeting.id));
+    return '<section class="panel"><div class="meeting-header"><div><h2>'+esc(meeting.title)+'</h2><div class="meeting-meta"><span>'+esc(meeting.date||'日期待补充')+'</span><span>·</span><span>'+esc(projectName(meeting.project_id))+'</span><span>'+esc(meeting.participants||'')+'</span></div></div>'+iconButton('编辑会议与逐字稿','edit','edit','data-collection="meetings" data-id="'+esc(meeting.id)+'"')+iconButton('删除会议','delete','trash','data-collection="meetings" data-id="'+esc(meeting.id)+'"','danger')+'</div><div class="meeting-body">'+
       '<details class="transcript-details"'+(meeting.transcript?'':' open')+'><summary>逐字稿 · '+String((meeting.transcript||'').length)+' 字</summary><div class="transcript-text">'+esc(meeting.transcript||'尚未粘贴逐字稿。可直接 Ctrl+V 到下方输入框。')+'</div></details>'+
-      '<div class="agent-meeting-intake mt-18"><label for="meeting-transcript-input">粘贴 / 拖入逐字稿</label><textarea id="meeting-transcript-input" rows="8" placeholder="Ctrl+V 粘贴转写；也可拖入 TXT / DOCX / PDF。系统会参考 PV Expert Call Notes 格式整理。">'+esc(state.meetingTranscriptDraft||'')+'</textarea><div class="row wrap mt-12"><select id="meeting-model">'+localModelOptions('deepseek',state.meetingModel||state.localModel||'deepseek-v4.1-flash')+'</select><button type="button" class="button primary" data-action="meeting-ai-draft" data-id="'+esc(meeting.id)+'" '+(state.meetingAiBusy?'disabled':'')+'>'+(state.meetingAiBusy?'正在整理…':'一键整理并保存纪要')+'</button></div></div>'+
-      
+      '<div class="agent-meeting-intake mt-18"><label for="meeting-transcript-input">粘贴 / 拖入逐字稿</label><textarea id="meeting-transcript-input" rows="8" placeholder="Ctrl+V 粘贴转写；也可拖入 TXT / DOCX / PDF。系统会参考 PV Expert Call Notes 格式整理。">'+esc(state.meetingTranscriptDraft||'')+'</textarea><div class="row wrap mt-12"><select id="meeting-model">'+localModels+'</select><button type="button" class="button primary" data-action="meeting-ai-draft" data-id="'+esc(meeting.id)+'" '+(state.meetingAiBusy?'disabled':'')+'>'+(state.meetingAiBusy?'正在整理…':'一键整理并保存纪要')+'</button></div></div>'+
       (draft?.warnings?.length?banner('AI 整理说明',draft.warnings.join('；'),'amber','info'):'')+
-      '<form id="meeting-summary-form" data-id="'+esc(meeting.id)+'"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="生成后可直接编辑；每次输入自动保存。">'+esc(draft?.summary??meeting.summary??'')+'</textarea></div><div class="row wrap"><span class="tiny muted">自动保存至本机与 OneDrive 项目目录</span><span class="spacer"></span>'+actionButton('Word','meeting-export','download','small soft','data-id="'+esc(meeting.id)+'" data-format="docx"')+actionButton('PDF','meeting-export','download','small primary','data-id="'+esc(meeting.id)+'" data-format="pdf"')+'</div></form>'+
-      (relatedTasks.length?'<div class="subsection-title"><h3>关联行动项 ('+relatedTasks.length+')</h3></div>'+relatedTasks.map(task=>'<div class="task-line"><span class="tag '+(task.status==='完成'?'green':'blue')+'">'+esc(task.status)+'</span><span class="task-title">'+esc(task.title)+'</span></div>').join(''):'')+
+      '<form id="meeting-summary-form" data-id="'+esc(meeting.id)+'"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="生成后可直接编辑；每次输入自动保存。">'+esc(note)+'</textarea></div><div class="row wrap"><span class="tiny muted" id="meeting-save-state">'+esc(state.meetingSaveState||'纪要保存在本机并自动同步')+'</span><span class="spacer"></span>'+actionButton('Word','meeting-export','download','small soft','data-id="'+esc(meeting.id)+'" data-format="docx"')+actionButton('PDF','meeting-export','download','small primary','data-id="'+esc(meeting.id)+'" data-format="pdf"')+'</div></form>'+
+      (relatedTasks.length?'<div class="subsection-title"><h3>已识别行动 ('+relatedTasks.length+')</h3></div>'+relatedTasks.map(task=>'<div class="task-line"><span class="tag '+(task.status==='完成'?'green':'blue')+'">'+esc(task.status)+'</span><span class="task-title">'+esc(task.title)+'</span></div>').join(''):'')+
       '</div></section>';
   }
   /* legacy render removed: meeting rendering lives in renderMeetingDetail above */
@@ -629,7 +629,7 @@
     await withBusy(button,'正在整理并保存…',async()=>{
       view().meetingAiBusy=true;render();
       try{
-        const result=await api('/meeting-draft',{body:{provider:'deepseek',model_id:$('#meeting-model')?.value||view().localModel||'deepseek-v4.1-flash',transcript,title:meeting.title,date:meeting.date,participants:meeting.participants}});
+        const result=await api('/meeting-draft',{body:{provider:'deepseek',model_id:view().meetingModel||view().localModel||'deepseek-v4.1-flash',transcript,title:meeting.title,date:meeting.date,participants:meeting.participants}});
         const normalized=formatMinuteText(result.summary||'');
         await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{summary:normalized}});
         view().drafts.set(String(id),{summary:normalized,actions:[],warnings:result.warnings||[],mode:'ai',model:result.model||''});
@@ -1033,8 +1033,6 @@
       case 'meeting-draft': return generateMeetingDraft(id, button);
       case 'meeting-ai-draft': return generateExpertNotes(id, button);
       case 'meeting-export': return exportMeeting(id, button.dataset.format, button);
-      case 'meeting-ai-draft': return generateExpertNotes(id, button);
-      case 'meeting-export': return exportMeeting(id, button.dataset.format, button);
       case 'meeting-deliverable': return deliverFromMeeting(id);
       case 'meeting-new-task': { const meeting = record('meetings', id); return editRecord('tasks', '', { meeting_id: id, project_id: meeting?.project_id || '' }); }
       case 'memory-category': view().memoryCategory = button.dataset.value; render(); return;
@@ -1071,7 +1069,7 @@
     $('#restore-input').addEventListener('change', event => restoreBackup(event.target.files[0]));
     // Ctrl/Cmd+V anywhere outside a text field imports the clipboard as a research document.
     document.addEventListener('paste', event => {
-      if (app.stopped || !app.data || isTypingTarget(event.target)) return;
+      if (app.stopped || !app.data) return;
       const text = event.clipboardData?.getData('text/plain') || '';
       if (!text.trim()) return;
       event.preventDefault();
@@ -1079,7 +1077,7 @@
     });
     // Drag and drop files (or pasted text) onto the window.
     ['dragenter', 'dragover'].forEach(type => document.addEventListener(type, event => {
-      if (app.stopped || isTypingTarget(event.target)) return;
+      if (app.stopped) return;
       if (![...(event.dataTransfer?.types || [])].some(item => item === 'Files' || item === 'text/plain')) return;
       event.preventDefault();
       document.body.classList.add('drop-active');

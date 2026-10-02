@@ -117,19 +117,20 @@ class Application:
           '严格遵照PV Expert Call Notes结构：标题；专家背景（任职时间、职务、职责、决策范围、此前经历）；专家点评（关键判断）；访谈内容按一级主题标题、•二级、o三级、➢四级整理。'
           '使用中性归属措辞，把事实、专家判断、传闻区分开；保留条件和矛盾口径；不补数字/姓名/公司事实，缺失标“未提及”。'
           '人名隐去到姓氏+先生/女士；不用表格，除非用户显式要求多专家对比矩阵。'
-          '只返回JSON对象：{"title":"...","summary":"完整可编辑纪要正文","participants":"...","date":"YYYY-MM-DD或空","warnings":[...]}。'
+          '只返回JSON对象：{"title":"...","summary":"完整可编辑纪要正文","participants":"...","date":"YYYY-MM-DD或空","actions":[{"title":"明确行动","owner":"明确负责人或空","due":"明确日期或空","source_quote":"逐字稿原文摘录"}],"warnings":[...]}；一般讨论不算行动项。'
           '\n原文逐字稿（唯一依据）：\n'+transcript)
-  answer,model_name=self.local_chat(base_url,model,'你是严格遵守证据边界的访谈纪要整理器。'+prompt,prompt,max_tokens=12000,timeout=120)
+  answer,model_name=self.local_chat(base_url,model,prompt,prompt,max_tokens=12000,timeout=120)
   try:
    result=json.loads(answer)
    if not isinstance(result,dict) or not isinstance(result.get('summary'),str):raise ValueError('模型未返回纪要正文')
   except json.JSONDecodeError as exc:raise ValueError('模型纪要格式无法解析；请重试或选择规则草稿') from exc
   summary=result['summary']
   if len(summary)>2_000_000:raise ValueError('纪要超过文档大小限制')
+  actions=result.get('actions') if isinstance(result.get('actions'),list) else []
   return {'title':str(result.get('title') or body.get('title') or 'Expert Call Notes')[:200],
           'summary':summary,'participants':str(result.get('participants') or body.get('participants') or ''),
-          'date':str(result.get('date') or body.get('date') or ''),'actions':[],
-          'warnings':list(result.get('warnings') or [])+['AI 草稿由 DeepSeek 生成，未自动创建行动项；导出前请核对原文。'],
+          'date':str(result.get('date') or body.get('date') or ''),'actions':actions[:40],
+          'warnings':list(result.get('warnings') or [])+['DeepSeek 纪要草稿；重点数字与归属待核对。'],
           'model':model_name,'mode':'ai'}
 
  def export_meeting(self,meeting,fmt):
