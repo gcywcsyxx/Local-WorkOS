@@ -31,46 +31,62 @@ def html_report(record):
  state='<script type="application/json" id="report-notes-data">{"version":1,"notes":[]}</script>'
  return report.replace('</head>',editor_css+'</head>').replace('</body>',state+'<script id="report-editor-script">'+editor+'</script></body>')
 
-def expert_minutes_docx(title,summary,participants='',date_text=''):
+def expert_minutes_docx(title,summary,participants='',date_text='',experts=None,matrix=None,contents=None):
  from docx import Document
  from docx.shared import Pt,Cm
- from docx.oxml import OxmlElement
+ from docx.enum.text import WD_TAB_ALIGNMENT,WD_TAB_LEADER
  from docx.oxml.ns import qn
  from io import BytesIO
  doc=Document();section=doc.sections[0];section.page_width=Cm(21);section.page_height=Cm(29.7);section.top_margin=Cm(2.2);section.bottom_margin=Cm(2.2);section.left_margin=Cm(2);section.right_margin=Cm(2)
- normal=doc.styles['Normal'];normal.font.name='Arial';normal.font.size=Pt(10)
- normal.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
- for name,size in [('Heading 1',14),('Heading 2',11)]:
-  style=doc.styles[name];style.font.name='Arial';style.font.size=Pt(size);style.font.bold=True;style.font.color.rgb=None;style.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
- p=doc.add_paragraph();p.style=doc.styles['Normal'];run=p.add_run(title);run.bold=True;run.font.name='Arial';run.font.size=Pt(14);run._element.get_or_add_rPr().rFonts.set(qn('w:eastAsia'),'KaiTi');p.paragraph_format.space_after=Pt(6)
- if date_text:
-  p=doc.add_paragraph(date_text);p.paragraph_format.space_after=Pt(4)
- if participants:
-  p=doc.add_paragraph(participants);p.paragraph_format.space_after=Pt(8)
+ normal=doc.styles['Normal'];normal.font.name='Arial';normal.font.size=Pt(10);normal.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
+ p=doc.add_paragraph();run=p.add_run(title);run.bold=True;run.font.name='Arial';run.font.size=Pt(14);run._element.get_or_add_rPr().rFonts.set(qn('w:eastAsia'),'KaiTi')
+ if date_text:doc.add_paragraph(date_text)
+ expert_list=experts if isinstance(experts,list) else []
+ if expert_list:
+  matrix=matrix if isinstance(matrix,dict) else {};topics=matrix.get('topics',[]);columns=matrix.get('experts',[]);cells=matrix.get('cells',[])
+  if topics and columns and len(cells)==len(topics):
+   table=doc.add_table(rows=1,cols=2);table.style='Table Grid';table.autofit=False;table.columns[0].width=Cm(3.3);table.columns[1].width=Cm(13.2)
+   table.cell(0,0).width=Cm(3.3);table.cell(0,1).width=Cm(13.2);table.cell(0,0).text='议题';table.cell(0,1).text='专家口径'
+   for topic,row in zip(topics,cells):
+    for c,index in enumerate(columns):
+     item=expert_list[index] if isinstance(index,int) and 0<=index<len(expert_list) else expert_list[min(c,len(expert_list)-1)]
+     label='-'.join(str(item.get(k,'')).strip() for k in ('institution','title') if item.get(k)) or ('专家 '+str(c+1))
+     values=row if isinstance(row,list) else []
+     celltext=str(values[c]) if c<len(values) else '未提及'
+     cells_row=table.add_row().cells;cells_row[0].width=Cm(3.3);cells_row[1].width=Cm(13.2);cells_row[0].text=str(topic);cells_row[1].text=label+'：'+celltext
+   doc.add_page_break()
+  if len(expert_list)>=4:
+   from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
+   doc.add_heading('目录',1);entries=contents if isinstance(contents,list) else []
+   for i,item in enumerate(expert_list):
+    fallback='-'.join(str(item.get(k,'')).strip() for k in ('institution','title') if item.get(k)) or ('专家 '+str(i+1))
+    toc=doc.add_paragraph();toc.paragraph_format.tab_stops.add_tab_stop(Cm(16.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS);toc.add_run(str(entries[i] if i<len(entries) else fallback));toc.add_run('\t'+str(i+3))
+   doc.add_page_break()
+  for i,item in enumerate(expert_list):
+   name='-'.join(str(item.get(k,'')).strip() for k in ('institution','title') if item.get(k)) or ('专家 '+str(i+1));doc.add_heading(name,1)
+   date_value=str(item.get('date') or date_text or '').strip()
+   if date_value:doc.add_paragraph(date_value)
+   doc.add_heading('专家背景',2);doc.add_paragraph(str(item.get('background') or '未提及'));doc.add_heading('专家点评',2)
+   for comment in item.get('comments',[]) if isinstance(item.get('comments'),list) else []:doc.add_paragraph(str(comment))
+   doc.add_heading('访谈内容',2)
+   content=str(item.get('content') or '').replace('\\n','\n').replace('\r\n','\n').replace('\r','\n')
+   for line in content.splitlines():
+    line=line.strip()
+    if line:doc.add_paragraph(line if not line.startswith('- ') else '• '+line[2:])
+   if i<len(expert_list)-1:doc.add_page_break()
+  out=BytesIO();doc.save(out);return out.getvalue()
  lines=summary.replace('\r\n','\n').replace('\r','\n').split('\n')
+ if participants:lines.insert(0,'专家身份：'+participants)
  for raw in lines:
   line=raw.strip()
-  if not line:
-   continue
-  if line.startswith('【') and line.endswith('】'):
-   doc.add_heading(line.strip('【】'),1)
-  elif line.startswith('# '):
-   doc.add_heading(line[2:].strip(),1)
-  elif line.startswith('## '):
-   doc.add_heading(line[3:].strip(),2)
-  elif line.startswith('➢'):
-   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(1.25);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('➢ '+line[1:].strip())
-  elif line.startswith('o '):
-   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(.8);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('o '+line[2:].strip())
-  elif line.startswith('• '):
-   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(.4);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('• '+line[2:].strip())
-  elif line.startswith('- '):
-   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(.4);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('• '+line[2:].strip())
-  else:
-   doc.add_paragraph(line)
+  if not line:continue
+  if line.startswith('【') and line.endswith('】'):doc.add_heading(line.strip('【】'),1)
+  elif line.startswith('# '):doc.add_heading(line[2:].strip(),1)
+  elif line.startswith('## '):doc.add_heading(line[3:].strip(),2)
+  elif line.startswith(('➢','o ','• ','- ')):
+   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(1.0 if line.startswith('➢') else .65 if line.startswith('o ') else .35);p.paragraph_format.first_line_indent=Cm(-.3);p.add_run(('• '+line[2:] if line.startswith('- ') else line))
+  else:doc.add_paragraph(line)
  out=BytesIO();doc.save(out);return out.getvalue()
-
-
 def valuation_xlsx(method, assumptions, result):
     import io, json
     from openpyxl import Workbook

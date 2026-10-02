@@ -267,15 +267,34 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(doc.paragraphs[1].text,'2026-01-01')
         self.assertEqual(sum(p.text=='2026-01-01' for p in doc.paragraphs),1)
 
+    def test_multi_expert_minutes_has_comparison_matrix_and_contents(self):
+        from workos.exports import expert_minutes_docx
+        from docx import Document
+        import io
+        experts=[{'institution':'合成机构'+str(i),'title':'合成职务','date':'2026-01-01','background':'合成背景'+str(i),'comments':['• 合成判断'+str(i)],'content':'采购份额\n• 合成短句'+str(i)} for i in range(5)]
+        matrix={'topics':['采购份额','技术路线'],'experts':[0,1,2,3,4],'cells':[[f'{i+1}份额' for i in range(5)],[f'{i+1}路线' for i in range(5)]]}
+        docx=expert_minutes_docx('Synthetic Expert Calls','摘要预览','','2026-01-01',experts,matrix,[f'合成机构{i}-合成职务' for i in range(5)])
+        doc=Document(io.BytesIO(docx));text='\n'.join(p.text for p in doc.paragraphs)
+        self.assertGreaterEqual(len(doc.tables),1)
+        table=doc.tables[0];self.assertEqual(len(table.rows),11);self.assertEqual(len(table.columns),2)
+        self.assertIn('目录',text)
+        self.assertIn('合成机构0-合成职务',text)
+        self.assertIn('合成机构0-合成职务\t3',text)
+        for value in ('合成机构0','合成机构4','采购份额','合成机构4-合成职务'):
+            self.assertIn(value,text)
+
     def test_meeting_ai_draft_uses_only_selected_transcript(self):
         meeting=self.create('meetings',{'title':'Synthetic Call','transcript':'synthetic transcript only'})
-        with patch.object(self.app,'local_chat',return_value=(json.dumps({'title':'Synthetic Call - Expert Call Notes','summary':'【专家背景】\n王先生。\n【专家点评】\n• 合成判断。\n【访谈内容】\n采购情况\n• 原文口径。','participants':'合成专家','date':'2026-01-01','warnings':[]},ensure_ascii=False),'deepseek-v4.1-flash')) as chat:
+        with patch.object(self.app,'local_chat',return_value=(json.dumps({'title':'Synthetic Call - Expert Call Notes','summary':'【专家背景】\n王先生。\n【专家点评】\n• 合成判断。\n【访谈内容】\n采购情况\n• 原文口径。','participants':'合成专家','date':'2026-01-01','experts':[{'institution':'合成机构','title':'客户总监','background':'合成背景','comments':['• 判断'],'content':'采购份额\n• 口径'}],'matrix':{'topics':['采购份额'],'experts':[0],'cells':[['原文短句'] ]},'contents':[],'warnings':[]},ensure_ascii=False),'deepseek-v4.1-flash')) as chat:
             status,result=self.request('POST','/api/meeting-draft',{'provider':'deepseek','model_id':'deepseek-v4.1-flash','transcript':'ONLY_SELECTED_SYNTHETIC_TRANSCRIPT'})
         self.assertEqual(status,200,result)
         self.assertEqual(result['mode'],'ai');self.assertEqual(result['model'],'deepseek-v4.1-flash')
         self.assertIn('ONLY_SELECTED_SYNTHETIC_TRANSCRIPT',chat.call_args.args[3])
         self.assertNotIn('synthetic transcript only',chat.call_args.args[3])
         self.assertIn('• 原文口径。',result['summary'])
+        self.assertEqual(result['matrix']['topics'],['采购份额'])
+        self.assertEqual(result['matrix']['cells'][0][0],'原文短句')
+        self.assertEqual(result['experts'][0]['institution'],'合成机构')
 
     def test_sync_status_and_manual_sync_are_safe_when_not_configured(self):
         status, data = self.request('GET', '/api/sync/status')
