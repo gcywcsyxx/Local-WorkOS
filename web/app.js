@@ -600,7 +600,7 @@
     const header = '<section class="panel"><div class="meeting-header"><div><h2>' + h.esc(meeting.title) + '</h2><div class="meeting-meta">' + h.esc(meeting.date || '日期待补充') + ' · ' + h.esc(h.projectName(meeting.project_id)) + ' · ' + h.esc(meeting.participants || '') + '</div></div>' + h.iconButton('编辑会议与逐字稿','edit','edit','data-collection="meetings" data-id="' + h.esc(meeting.id) + '"') + h.iconButton('删除会议','delete','trash','data-collection="meetings" data-id="' + h.esc(meeting.id) + '"','danger') + '</div><div class="meeting-body">';
     const transcript = '<details class="transcript-details"' + (meeting.transcript ? '' : ' open') + '><summary>逐字稿 · ' + String((meeting.transcript || '').length) + ' 字</summary><div class="transcript-text">' + h.esc(meeting.transcript || '尚未粘贴逐字稿。可直接 Ctrl+V 粘贴。') + '</div></details>';
     const warnings = draft?.warnings?.length ? h.banner('AI 整理说明', draft.warnings.join('；'), 'amber', 'info') : '';
-    const intake = '<div class="field mt-18"><label for="meeting-transcript-input">原文转写</label><textarea id="meeting-transcript-input" rows="7" placeholder="粘贴会议逐字稿；如当前记录已有转写，会自动带入。">' + h.esc(state.meetingTranscriptDraft || meeting.transcript || '') + '</textarea><div class="row wrap mt-12"><select id="meeting-model">' + h.localModels + '</select>' + h.actionButton(state.meetingAiBusy ? '正在整理…' : '一键整理并保存纪要','meeting-ai-draft','spark','primary','data-id="' + h.esc(meeting.id) + '" ' + (state.meetingAiBusy ? 'disabled' : '')) + '</div></div>';
+    const intake = '<div class="field mt-18"><label for="meeting-transcript-input">原文转写 · 粘贴或拖入 TXT / DOCX / PDF</label><div class="meeting-transcript-drop" data-meeting-transcript-drop="true"><textarea id="meeting-transcript-input" rows="7" placeholder="Ctrl+V 粘贴逐字稿；也可把 TXT / DOCX / PDF 拖到此区域。原文会自动保存。">' + h.esc(state.meetingTranscriptDraft || meeting.transcript || '') + '</textarea></div><div class="row wrap mt-12"><select id="meeting-model">' + h.localModels + '</select>' + h.actionButton(state.meetingAiBusy ? '正在整理…' : '一键整理并保存纪要','meeting-ai-draft','spark','primary','data-id="' + h.esc(meeting.id) + '" ' + (state.meetingAiBusy ? 'disabled' : '')) + '</div></div>';
     const form = '<form id="meeting-summary-form" data-id="' + h.esc(meeting.id) + '"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="生成后可直接编辑；自动保存。">' + h.esc(summary) + '</textarea></div><div class="row wrap"><span class="tiny muted" id="meeting-save-state">' + h.esc(state.meetingSaveState || '本机自动保存，并同步项目文件') + '</span><span class="spacer"></span>' + h.actionButton('Word','meeting-export','download','small soft','data-id="' + h.esc(meeting.id) + '" data-format="docx"') + h.actionButton('PDF','meeting-export','download','small primary','data-id="' + h.esc(meeting.id) + '" data-format="pdf"') + '</div></form>';
     const tasks = relatedTasks.length ? '<div class="subsection-title"><h3>已识别行动 (' + relatedTasks.length + ')</h3></div>' + relatedTasks.map(task => '<div class="task-line"><span class="tag ' + (task.status === '完成' ? 'green' : 'blue') + '">' + h.esc(task.status) + '</span><span class="task-title">' + h.esc(task.title) + '</span></div>').join('') : '';
     return header + transcript + intake + warnings + form + tasks + '</div></section>';
@@ -756,6 +756,11 @@
     catch (error) { if (error.name !== 'StaleRequestError') state.valuationError = error.message; }
     finally { state.valuationPending = false; if (view() === state && app.page === 'finance') render(); }
   }
+  async function exportValuationXlsx(button){
+    const state=view();if(!state.valuationResult||!state.valuationAssumptions){notify('请先计算估值结果。',true);return;}
+    const title=(state.valuationResult.method_label||'Valuation Model')+' '+today();
+    await withBusy(button,'正在生成 Excel…',()=>download('/model/export-xlsx',title+'.xlsx',{method:'POST',body:{method:state.valuationMethod,assumptions:state.valuationAssumptions,title}}));
+  }
   async function saveValuation() {
     const state = view(); if (!state.valuationResult || !state.valuationAssumptions) return;
     const result = state.valuationResult; const assumptions = state.valuationAssumptions;
@@ -791,8 +796,8 @@
       state.deliverableDirty = false; state.deliverableDraft = null; await refreshData(); return true;
     } finally { state.deliverableSaving = false; if (view() === state && app.page === 'deliverables') render(); else renderShell(); }
   }
-  async function download(path, fallbackName) {
-    const response = await api(path, { raw: true }); const blob = await response.blob();
+  async function download(path, fallbackName, request = {}) {
+    const response = await api(path, { ...request, raw: true }); const blob = await response.blob();
     const disposition = response.headers.get('Content-Disposition') || '';
     let filename = fallbackName;
     try { const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i); const ascii = disposition.match(/filename="?([^";]+)"?/i); if (utf) filename = decodeURIComponent(utf[1]); else if (ascii) filename = ascii[1]; } catch { /* Fall back to the safe local title. */ }
@@ -943,7 +948,11 @@
     bindSelect('valuation-method', value => { const state = view(); state.valuationMethod = value; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationError = ''; render(); });
     bindSelect('valuation-project', value => { view().valuationProjectId = value; });
     bindSelect('valuation-model', value => { view().valuationModel = value; try { localStorage.setItem('local-workos:dsh-model', value); } catch { /* Optional preference. */ } });
-    $('#meeting-transcript-input')?.addEventListener('input', event => { view().meetingTranscriptDraft=event.target.value; });
+    $('#meeting-transcript-input')?.addEventListener('input',event=>{const state=view();const text=event.target.value;state.meetingTranscriptDraft=text;const id=state.meetingId;if(!id)return;clearTimeout(state.transcriptSaveTimer);const label=$('#meeting-save-state');if(label)label.textContent='正在保存原文…';state.transcriptSaveTimer=setTimeout(async()=>{try{await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript:text}});await refreshData();const node=$('#meeting-save-state');if(node)node.textContent='逐字稿已保存在本机并同步';}catch(error){notify('逐字稿保存失败：'+error.message,true);}},700);});
+    const meetingDrop=$('[data-meeting-transcript-drop]');
+    meetingDrop?.addEventListener('dragover',event=>{event.preventDefault();meetingDrop.classList.add('drag-over');});
+    meetingDrop?.addEventListener('dragleave',()=>meetingDrop.classList.remove('drag-over'));
+    meetingDrop?.addEventListener('drop',async event=>{event.preventDefault();meetingDrop.classList.remove('drag-over');const file=event.dataTransfer?.files?.[0];if(!file)return;try{if(file.size>20*1024*1024)throw new Error('文件最大20MB');const base64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('读取文件失败'));reader.readAsDataURL(file)});const extracted=await api('/meeting-transcript-extract',{body:{name:file.name,base64}});const input=$('#meeting-transcript-input');input.value=extracted.transcript;input.dispatchEvent(new Event('input',{bubbles:true}));notify('已提取 '+file.name+'，正在自动保存逐字稿。');}catch(error){notify('提取逐字稿失败：'+error.message,true);}});
     $('#meeting-summary')?.addEventListener('input', event => { const state=view(); const form=$('#meeting-summary-form'); if(!form)return; clearTimeout(state.meetingSaveTimer); const label=$('#meeting-save-state'); if(label)label.textContent='正在编辑…'; state.meetingSaveTimer=setTimeout(()=>autoSaveMeeting(form),700); });
     $('#valuation-text')?.addEventListener('input', event => { const state = view(); state.valuationText = event.target.value; if (state.valuationProposal) { state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; $('.valuation-review')?.remove(); $('.valuation-result')?.remove(); } });
     $('#valuation-json')?.addEventListener('input', event => { view().valuationJson = event.target.value; view().valuationResult = null; $('.valuation-result')?.remove(); });
@@ -1028,6 +1037,7 @@
       case 'valuation-parse': return parseValuationAssumptions();
       case 'valuation-calculate': return calculateValuation();
       case 'valuation-save': return saveValuation();
+      case 'valuation-export-xlsx': return exportValuationXlsx(button);
       case 'select-deliverable': if (String(view().deliverableId) === String(id)) return; if (!await canLeave()) return; view().deliverableDirty = false; view().deliverableId = id; render(); return;
       case 'export': return exportDeliverable(id, button.dataset.format, button);
       case 'backup': return withBusy(button, '正在备份…', () => download('/backup', `LocalWorkOS-${app.workspace}-${today()}.json`));
@@ -1055,6 +1065,7 @@
       if (app.stopped || !app.data) return;
       const text = event.clipboardData?.getData('text/plain') || '';
       if (!text.trim()) return;
+      if (event.target?.id === 'meeting-transcript-input') return;
       event.preventDefault();
       importPastedText(text);
     });

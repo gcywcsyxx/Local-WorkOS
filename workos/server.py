@@ -414,6 +414,13 @@ class Handler(BaseHTTPRequestHandler):
    if match:
     record=store.get('deliverables',match[1]);fmt=query.get('format',['md'])[0]
     title=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',record['title'])[:100]
+    if fmt=='xlsx':
+     from .exports import valuation_xlsx
+     from .valuation import calculate_valuation
+     method=record.get('method');assumptions=record.get('assumptions')
+     if not isinstance(assumptions,dict):raise ValueError('模型记录缺少结构化假设')
+     result=calculate_valuation(method,assumptions)
+     return self.respond(valuation_xlsx(method,assumptions,result),mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename=title+'.xlsx')
     if fmt=='md':return self.respond(markdown(record),mime='text/markdown; charset=utf-8',filename=title+'.md')
     if fmt=='html':return self.respond(html_report(record),mime='text/html; charset=utf-8',filename=title+'.html')
     if fmt=='docx':return self.respond(docx_report(record),mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document',filename=title+'.docx')
@@ -463,6 +470,15 @@ class Handler(BaseHTTPRequestHandler):
      self.app.sync_workspace(mode)
      return self.respond(record,201)
     if path=='/api/ask':return self.respond(self.app.ask(store,body))
+    if path=='/api/meeting-transcript-extract':
+     from .engine import parse_upload
+     name=body.get('name','transcript.txt');encoded=body.get('base64','')
+     if not isinstance(name,str) or not isinstance(encoded,str) or len(encoded)>27_000_000:raise ValueError('逐字稿文件格式或大小无效')
+     try:raw=base64.b64decode(encoded,validate=True)
+     except ValueError:raise ValueError('文件编码不正确')
+     if len(raw)>20_000_000:raise ValueError('逐字稿文件最多20MB')
+     parsed=parse_upload(Path(name).name,raw)
+     return self.respond({'name':Path(name).name,'transcript':parsed.get('content',''),'warnings':parsed.get('warnings',[])})
     if path=='/api/meeting-draft':
      return self.respond(self.app.meeting_draft(body,store))
     if path=='/api/agent':
@@ -474,6 +490,13 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/model/valuation':
      from .valuation import calculate_valuation
      return self.respond(calculate_valuation(body.get('method'),body.get('assumptions')))
+    if path=='/api/model/export-xlsx':
+     from .exports import valuation_xlsx
+     from .valuation import calculate_valuation
+     method=body.get('method');assumptions=body.get('assumptions')
+     result=calculate_valuation(method,assumptions)
+     title=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',str(body.get('title') or result.get('method_label') or 'Valuation Model'))[:100]
+     return self.respond(valuation_xlsx(method,assumptions,result),status=200,mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename=title+'.xlsx')
     if path=='/api/model/calculate':
      from .engine import calculate_model
      return self.respond(calculate_model(body))

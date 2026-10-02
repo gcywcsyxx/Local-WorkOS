@@ -42,7 +42,7 @@ def expert_minutes_docx(title,summary,participants='',date_text=''):
  normal.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
  for name,size in [('Heading 1',14),('Heading 2',11)]:
   style=doc.styles[name];style.font.name='Arial';style.font.size=Pt(size);style.font.bold=True;style.font.color.rgb=None;style.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
- p=doc.add_heading(title,0);p.paragraph_format.space_after=Pt(6)
+ p=doc.add_paragraph();p.style=doc.styles['Normal'];run=p.add_run(title);run.bold=True;run.font.name='Arial';run.font.size=Pt(14);run._element.get_or_add_rPr().rFonts.set(qn('w:eastAsia'),'KaiTi');p.paragraph_format.space_after=Pt(6)
  if date_text:
   p=doc.add_paragraph(date_text);p.paragraph_format.space_after=Pt(4)
  if participants:
@@ -69,6 +69,42 @@ def expert_minutes_docx(title,summary,participants='',date_text=''):
   else:
    doc.add_paragraph(line)
  out=BytesIO();doc.save(out);return out.getvalue()
+
+
+def valuation_xlsx(method, assumptions, result):
+ import io,json
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ wb=Workbook();summary=wb.active;summary.title='Summary'
+ summary.append(['Local WorkOS Valuation Model']);summary.append(['Method',result.get('method_label',method)]);summary.append(['Currency / Unit',str(assumptions.get('currency',''))+' / '+str(assumptions.get('unit',''))]);summary.append(['Formula',result.get('formula','')]);summary.append([]);summary.append(['Metric','Value'])
+ for key in ('equity_value','enterprise_value','implied_value_per_share','irr','moic','entry_sponsor_equity','sponsor_proceeds'):
+  if key in result:summary.append([key,result[key]])
+ for cell in summary[1]:cell.font=Font(name='Arial',bold=True,size=14,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='17365D')
+ for row in summary.iter_rows(min_row=2):
+  for cell in row:cell.font=Font(name='Arial',size=10)
+ summary.column_dimensions['A'].width=28;summary.column_dimensions['B'].width=54
+ ass=wb.create_sheet('Assumptions');ass.append(['Assumption','Value'])
+ forecasts=assumptions.get('forecasts')
+ for k,v in assumptions.items():
+  if k!='forecasts':ass.append([k,json.dumps(v,ensure_ascii=False) if isinstance(v,(dict,list)) else v])
+ if isinstance(forecasts,list):
+  forecast=wb.create_sheet('Forecasts');keys=sorted({k for row in forecasts if isinstance(row,dict) for k in row});forecast.append(keys)
+  for item in forecasts:
+   if isinstance(item,dict):forecast.append([item.get(k) for k in keys])
+  for col in forecast.columns:
+   letter=col[0].column_letter;forecast.column_dimensions[letter].width=18
+ rows=result.get('forecast') or result.get('rows')
+ if isinstance(rows,list):
+  ws=wb.create_sheet('Calculated Output');keys=sorted({k for row in rows if isinstance(row,dict) for k in row});ws.append(keys)
+  for row in rows:
+   if isinstance(row,dict):ws.append([row.get(k) for k in keys])
+ for ws in wb.worksheets:
+  ws.freeze_panes='A2';ws.sheet_view.showGridLines=False
+  for cell in ws[1]:cell.font=Font(name='Arial',bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='17365D');cell.alignment=Alignment(wrap_text=True)
+  for row in ws.iter_rows():
+   for cell in row:
+    if cell.value is not None:cell.font=Font(name='Arial',size=10,bold=cell.row==1,color='FFFFFF' if cell.row==1 else '243345');cell.alignment=Alignment(vertical='top',wrap_text=True)
+ out=io.BytesIO();wb.save(out);return out.getvalue()
 
 def docx_report(record):
  try:

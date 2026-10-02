@@ -254,8 +254,24 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(any(note['title'] == '助手结论' for note in self.request('GET', '/api/state')[1]['notes']))
     def test_house_minutes_docx_format(self):
         from workos.exports import expert_minutes_docx
+        from docx import Document
         docx = expert_minutes_docx('Synthetic Expert Call Notes', '【专家背景】\n王先生，合成职位。\n【专家点评】\n• 合成判断。\n【访谈内容】\n产品定位\n• 技术路线\no 仍需验证\n➢ 合成细节。', 'Synthetic participant', '2026-01-01')
         self.assertTrue(docx.startswith(b'PK\x03\x04'))
+        import io
+        doc=Document(io.BytesIO(docx));text='\n'.join(p.text for p in doc.paragraphs)
+        for required in ('Synthetic Expert Call Notes','专家背景','专家点评','访谈内容','• 合成判断。','o 仍需验证','➢ 合成细节。','Synthetic participant'):
+            self.assertIn(required,text)
+        self.assertEqual(round(doc.sections[0].page_width.cm,1),21.0)
+
+    def test_meeting_ai_draft_uses_only_selected_transcript(self):
+        meeting=self.create('meetings',{'title':'Synthetic Call','transcript':'synthetic transcript only'})
+        with patch.object(self.app,'local_chat',return_value=(json.dumps({'title':'Synthetic Call - Expert Call Notes','summary':'【专家背景】\n王先生。\n【专家点评】\n• 合成判断。\n【访谈内容】\n采购情况\n• 原文口径。','participants':'合成专家','date':'2026-01-01','warnings':[]},ensure_ascii=False),'deepseek-v4.1-flash')) as chat:
+            status,result=self.request('POST','/api/meeting-draft',{'provider':'deepseek','model_id':'deepseek-v4.1-flash','transcript':'ONLY_SELECTED_SYNTHETIC_TRANSCRIPT'})
+        self.assertEqual(status,200,result)
+        self.assertEqual(result['mode'],'ai');self.assertEqual(result['model'],'deepseek-v4.1-flash')
+        self.assertIn('ONLY_SELECTED_SYNTHETIC_TRANSCRIPT',chat.call_args.args[3])
+        self.assertNotIn('synthetic transcript only',chat.call_args.args[3])
+        self.assertIn('• 原文口径。',result['summary'])
 
     def test_sync_status_and_manual_sync_are_safe_when_not_configured(self):
         status, data = self.request('GET', '/api/sync/status')
@@ -266,6 +282,19 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(result['enabled'])
         bootstrap = self.request('GET', '/api/bootstrap')[1]
         self.assertFalse(bootstrap['sync']['enabled'])
+
+    def test_valuation_xlsx_export_contains_reproducible_inputs_and_outputs(self):
+        from openpyxl import load_workbook
+        import io
+        assumptions={'currency':'RMB','unit':'百万元','period':'FY2025A','net_income':100,'pe_multiple':12}
+        status,raw=self.request('POST','/api/model/export-xlsx',{'method':'net_income','assumptions':assumptions,'title':'Synthetic Model'})
+        self.assertEqual(status,200)
+        self.assertTrue(raw.startswith(b'PK\x03\x04'))
+        wb=load_workbook(io.BytesIO(raw),data_only=True)
+        self.assertIn('Summary',wb.sheetnames);self.assertIn('Assumptions',wb.sheetnames)
+        rows={wb['Summary'].cell(row,1).value:wb['Summary'].cell(row,2).value for row in range(1,wb['Summary'].max_row+1)}
+        self.assertEqual(rows['equity_value'],1200)
+        self.assertEqual(self.request('POST','/api/model/export-xlsx',{'method':'net_income','assumptions':{'net_income':-1,'pe_multiple':12}})[0],400)
 
     def test_valuation_api_is_deterministic_and_nl_parse_runs_without_extra_prompts(self):
         assumptions = {'currency': 'RMB', 'unit': '百万元', 'period': 'FY2025A', 'net_income': 100, 'pe_multiple': 12}
