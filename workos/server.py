@@ -143,9 +143,9 @@ class Application:
   docx_bytes=expert_minutes_docx(title,summary,str(meeting.get('participants') or ''),str(meeting.get('date') or ''))
   if fmt=='docx':return docx_bytes
   # Use only the bundled LibreOffice Kit; never fall back to system soffice.
-  cli=Path(r'C:\Users\synthetic-user\AppData\Local\Programs\DeepSeek Harness\resources\app.asar.unpacked\dsh\node_modules\@deepseek-ai\libreoffice-kit\lib\cli.js')
-  node=Path(r'C:\Users\synthetic-user\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe')
-  if not cli.is_file() or not node.is_file():raise ValueError('未找到批准的 LibreOffice Kit，PDF 暂不可用；Word 文件仍可下载')
+  cli=Path(os.environ.get('WORKOS_LIBREOFFICE_CLI','')) if os.environ.get('WORKOS_LIBREOFFICE_CLI') else None
+  node=Path(os.environ.get('WORKOS_NODE','')) if os.environ.get('WORKOS_NODE') else None
+  if not cli or not node or not cli.is_file() or not node.is_file():raise ValueError('未配置批准的 LibreOffice Kit；请设置 WORKOS_LIBREOFFICE_CLI 与 WORKOS_NODE，或先下载 Word')
   with tempfile.TemporaryDirectory(prefix='workos-minute-export-') as folder:
    root=Path(folder);source=root/'minutes.docx';target=root/'minutes.pdf';source.write_bytes(docx_bytes)
    env=dict(os.environ)
