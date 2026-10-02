@@ -31,6 +31,45 @@ def html_report(record):
  state='<script type="application/json" id="report-notes-data">{"version":1,"notes":[]}</script>'
  return report.replace('</head>',editor_css+'</head>').replace('</body>',state+'<script id="report-editor-script">'+editor+'</script></body>')
 
+def expert_minutes_docx(title,summary,participants='',date_text=''):
+ from docx import Document
+ from docx.shared import Pt,Cm
+ from docx.oxml import OxmlElement
+ from docx.oxml.ns import qn
+ from io import BytesIO
+ doc=Document();section=doc.sections[0];section.page_width=Cm(21);section.page_height=Cm(29.7);section.top_margin=Cm(2.2);section.bottom_margin=Cm(2.2);section.left_margin=Cm(2);section.right_margin=Cm(2)
+ normal=doc.styles['Normal'];normal.font.name='Arial';normal.font.size=Pt(10)
+ normal.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
+ for name,size in [('Heading 1',14),('Heading 2',11)]:
+  style=doc.styles[name];style.font.name='Arial';style.font.size=Pt(size);style.font.bold=True;style.font.color.rgb=None;style.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
+ p=doc.add_heading(title,0);p.paragraph_format.space_after=Pt(6)
+ if date_text:
+  p=doc.add_paragraph(date_text);p.paragraph_format.space_after=Pt(4)
+ if participants:
+  p=doc.add_paragraph(participants);p.paragraph_format.space_after=Pt(8)
+ lines=summary.replace('\r\n','\n').replace('\r','\n').split('\n')
+ for raw in lines:
+  line=raw.strip()
+  if not line:
+   continue
+  if line.startswith('【') and line.endswith('】'):
+   doc.add_heading(line.strip('【】'),1)
+  elif line.startswith('# '):
+   doc.add_heading(line[2:].strip(),1)
+  elif line.startswith('## '):
+   doc.add_heading(line[3:].strip(),2)
+  elif line.startswith('➢'):
+   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(1.25);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('➢ '+line[1:].strip())
+  elif line.startswith('o '):
+   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(.8);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('o '+line[2:].strip())
+  elif line.startswith('• '):
+   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(.4);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('• '+line[2:].strip())
+  elif line.startswith('- '):
+   p=doc.add_paragraph(style='Normal');p.paragraph_format.left_indent=Cm(.4);p.paragraph_format.first_line_indent=Cm(-.35);p.add_run('• '+line[2:].strip())
+  else:
+   doc.add_paragraph(line)
+ out=BytesIO();doc.save(out);return out.getvalue()
+
 def docx_report(record):
  try:
   from docx import Document

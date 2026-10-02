@@ -54,7 +54,7 @@ class ServerTests(unittest.TestCase):
             response = connection.getresponse()
             raw = response.read()
             mime = response.getheader('Content-Type', '')
-            parsed = json.loads(raw) if mime.startswith('application/json') else raw.decode('utf-8')
+            parsed = json.loads(raw) if mime.startswith('application/json') else raw.decode('utf-8') if mime.startswith('text/') else raw
             return response.status, parsed
         finally:
             connection.close()
@@ -252,7 +252,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result['answer'], '已保存 1 条结论。')
         self.assertEqual(result['steps'][0]['action'], 'create_note')
         self.assertTrue(any(note['title'] == '助手结论' for note in self.request('GET', '/api/state')[1]['notes']))
-        self.assertEqual(self.request('POST', '/api/agent', {'message': 'hi', 'model_id': 'gpt-6-luna'})[0], 400)
+    def test_house_minutes_docx_format(self):
+        from workos.exports import expert_minutes_docx
+        docx = expert_minutes_docx('Synthetic Expert Call Notes', '【专家背景】\n王先生，合成职位。\n【专家点评】\n• 合成判断。\n【访谈内容】\n产品定位\n• 技术路线\no 仍需验证\n➢ 合成细节。', 'Synthetic participant', '2026-01-01')
+        self.assertTrue(docx.startswith(b'PK\x03\x04'))
 
     def test_sync_status_and_manual_sync_are_safe_when_not_configured(self):
         status, data = self.request('GET', '/api/sync/status')

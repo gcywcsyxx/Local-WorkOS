@@ -79,7 +79,7 @@
   const app = { workspace: 'personal', csrf: '', boot: null, data: null, page: 'overview', epoch: 0, modalBusy: false, mutations: 0, stopped: false, uploadBusy: false };
   const views = new Map();
   function freshView() {
-    return { page: 'overview', projectStage: '全部', projectQuery: '', projectId: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceQuery: '', selectedSources: new Set(), answers: [], askMode: 'deepseek', dshModel: loadDshModel(), localModel: loadLocalModel(), agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentHistory: [], question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '', valuationModel: 'gpt-6-luna' };
+    return { page: 'overview', projectStage: '全部', projectQuery: '', projectId: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceQuery: '', selectedSources: new Set(), answers: [], askMode: 'deepseek', dshModel: loadDshModel(), localModel: loadLocalModel(), agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentHistory: [], question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), meetingTranscriptDraft: '', meetingModel: 'deepseek-v4.1-flash', meetingAiBusy: false, meetingSaveTimer: null, meetingSaveState: '', memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '', valuationModel: 'gpt-6-luna' };
   }
   function view() { if (!views.has(app.workspace)) views.set(app.workspace, freshView()); return views.get(app.workspace); }
   function loadDshModel() { try { const model = localStorage.getItem('local-workos:dsh-model'); return DSH_MODEL_IDS.has(model) ? model : 'gpt-6-luna'; } catch { return 'gpt-6-luna'; } }
@@ -585,14 +585,29 @@
     if (!meetings.some(meeting => String(meeting.id) === String(state.meetingId))) state.meetingId = meetings[0]?.id || '';
     return { meetings, meeting: meetings.find(item => String(item.id) === String(state.meetingId)) };
   }
+  const formatMinuteText = text => String(text || '').replace(/(^|\n)([•\-])\s*/g, '$1• ').replace(/(^|\n)o\s+/g, '$1o ').replace(/(^|\n)[➢➤]\s*/g, '$1➢ ').replace(/([\d])\s*[–—]\s*([\d])/g, '$1-$2');
   function renderMeetings() {
     const state = view(); const { meetings, meeting } = meetingSelection();
-    return heading('会议中心', 'FROM CONVERSATION TO ACTION', '保留讨论原文，编辑会议纪要，逐项确认后再创建任务。', actionButton('新建会议', 'create', 'plus', 'primary', 'data-collection="meetings"')) +
+    const localModels=localModelOptions('deepseek',state.meetingModel||state.localModel||'deepseek-v4.1-flash');
+    const modeLabel='DeepSeek Flash (V4.1)';
+    return heading('会议纪要', 'EXPERT CALL NOTES', '粘贴原文，'+modeLabel+' 自动整理成册，编辑后直接导出 Word / PDF。', actionButton('新建会议', 'create', 'plus', 'primary', 'data-collection="meetings"')) +
       `<div class="toolbar"><div class="toolbar-group">${projectFilter('meeting-project', state.meetingProject)}<span class="small muted">${meetings.length} 场会议</span></div></div>
       <div class="split-layout"><section class="panel">${panelTitle('会议记录', 'meetings')}<div class="record-list">${meetings.length ? meetings.map(item => `<button type="button" class="record-item${String(item.id) === String(state.meetingId) ? ' active' : ''}" data-action="select-meeting" data-id="${esc(item.id)}"><h3>${esc(item.title)}</h3><p>${esc(projectName(item.project_id))}</p><span class="record-date">${esc(item.date || '日期待补充')} · ${esc(item.participants || '参会人待补充')}</span></button>`).join('') : empty('meetings', '尚无会议记录', '粘贴逐字稿即可开始。', '', true)}</div></section>
       <div>${meeting ? renderMeetingDetail(meeting) : `<section class="panel">${empty('meetings', '让会议形成可跟进的行动', '新建会议并粘贴逐字稿。规则引擎生成的是可编辑草稿，不会自动创建任务或作出承诺。', actionButton('记录第一场会议', 'create', 'plus', 'primary', 'data-collection="meetings"'))}</section>`}</div></div>`;
   }
   function renderMeetingDetail(meeting) {
+    const state=view();const draft=state.drafts.get(String(meeting.id));const relatedTasks=list('tasks').filter(task=>String(task.meeting_id)===String(meeting.id));
+    return '<section class="panel"><div class="meeting-header"><div><h2>'+esc(meeting.title)+'</h2><div class="meeting-meta"><span>'+esc(meeting.date||'日期未识别')+'</span><span>·</span><span>'+esc(projectName(meeting.project_id))+'</span><span>'+esc(meeting.participants||'')+'</span></div></div><div class="row">'+iconButton('编辑会议与逐字稿','edit','edit','data-collection="meetings" data-id="'+esc(meeting.id)+'"')+iconButton('删除会议','delete','trash','data-collection="meetings" data-id="'+esc(meeting.id)+'"','danger')+'</div></div><div class="meeting-body">'+
+      '<details class="transcript-details"'+(meeting.transcript?'':' open')+'><summary>逐字稿 · '+String((meeting.transcript||'').length)+' 字</summary><div class="transcript-text">'+esc(meeting.transcript||'尚未粘贴逐字稿。可直接 Ctrl+V 到下方输入框。')+'</div></details>'+
+      '<div class="agent-meeting-intake mt-18"><label for="meeting-transcript-input">粘贴 / 拖入逐字稿</label><textarea id="meeting-transcript-input" rows="8" placeholder="Ctrl+V 粘贴转写；也可拖入 TXT / DOCX / PDF。系统会参考 PV Expert Call Notes 格式整理。">'+esc(state.meetingTranscriptDraft||'')+'</textarea><div class="row wrap mt-12"><select id="meeting-model">'+localModelOptions('deepseek',state.meetingModel||state.localModel||'deepseek-v4.1-flash')+'</select><button type="button" class="button primary" data-action="meeting-ai-draft" data-id="'+esc(meeting.id)+'" '+(state.meetingAiBusy?'disabled':'')+'>'+(state.meetingAiBusy?'正在整理…':'一键整理并保存纪要')+'</button></div></div>'+
+      
+      (draft?.warnings?.length?banner('AI 整理说明',draft.warnings.join('；'),'amber','info'):'')+
+      '<form id="meeting-summary-form" data-id="'+esc(meeting.id)+'"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="生成后可直接编辑；每次输入自动保存。">'+esc(draft?.summary??meeting.summary??'')+'</textarea></div><div class="row wrap"><span class="tiny muted">自动保存至本机与 OneDrive 项目目录</span><span class="spacer"></span>'+actionButton('Word','meeting-export','download','small soft','data-id="'+esc(meeting.id)+'" data-format="docx"')+actionButton('PDF','meeting-export','download','small primary','data-id="'+esc(meeting.id)+'" data-format="pdf"')+'</div></form>'+
+      (relatedTasks.length?'<div class="subsection-title"><h3>关联行动项 ('+relatedTasks.length+')</h3></div>'+relatedTasks.map(task=>'<div class="task-line"><span class="tag '+(task.status==='完成'?'green':'blue')+'">'+esc(task.status)+'</span><span class="task-title">'+esc(task.title)+'</span></div>').join(''):'')+
+      '</div></section>';
+  }
+  /* legacy render removed: meeting rendering lives in renderMeetingDetail above */
+  function renderMeetingDetailOld(meeting) {
     const draft = view().drafts.get(String(meeting.id));
     const actions = draft?.actions || [];
     const relatedTasks = list('tasks').filter(task => String(task.meeting_id) === String(meeting.id));
@@ -606,6 +621,34 @@
         return `<div class="action-candidate${created ? ' created' : ''}"><input type="checkbox" name="confirmed" value="${index}" aria-label="确认行动项 ${index + 1}" ${created ? 'disabled checked' : ''}><div class="candidate-fields"><label class="sr-only" for="action-title-${index}">行动项 ${index + 1} 标题</label><input id="action-title-${index}" name="title-${index}" class="candidate-title" value="${esc(action.title)}" ${created ? 'disabled' : ''}><div class="candidate-meta"><label>负责人<input name="owner-${index}" value="${esc(action.owner)}" ${created ? 'disabled' : ''}></label><label>到期日期<input name="due-${index}" type="date" value="${esc(/^\d{4}-\d{2}-\d{2}$/.test(action.due || '') ? action.due : '')}" ${created ? 'disabled' : ''}></label></div>${action.source_quote ? `<p class="candidate-quote">原文：“${esc(action.source_quote)}”</p>` : ''}${created ? '<span class="tag green mt-12">已关联任务，不重复创建</span>' : ''}</div></div>`;
       }).join('')}<div class="row wrap mt-18"><button type="submit" class="button primary">${icon('tasks')}确认选中并建任务</button><span class="tiny muted">仅创建你勾选的行动项</span></div></form>` : empty('circleCheck', '没有识别到明确行动项', '可直接新建任务，也可以编辑原文后重新生成。规则识别不等于完整会议理解。', actionButton('手动新建任务', 'meeting-new-task', 'plus', 'small', `data-id="${esc(meeting.id)}"`), true)}` : ''}
       ${relatedTasks.length ? `<div class="subsection-title"><h3>会议关联任务 <span class="count-pill">${relatedTasks.length}</span></h3></div>${relatedTasks.map(task => `<div class="task-line"><span class="tag ${task.status === '完成' ? 'green' : 'blue'}">${esc(task.status)}</span><button type="button" class="task-title" data-action="edit" data-collection="tasks" data-id="${esc(task.id)}">${esc(task.title)}</button><span class="task-meta">${esc(task.owner || '未分配')}</span></div>`).join('')}` : ''}</div></section>`;
+  }
+  async function generateExpertNotes(id,button){
+    const meeting=record('meetings',id);if(!meeting)return;
+    const transcript=(view().meetingTranscriptDraft||'').trim()||String(meeting.transcript||'').trim();
+    if(!transcript){notify('先粘贴或拖入逐字稿。',true);return;}
+    await withBusy(button,'正在整理并保存…',async()=>{
+      view().meetingAiBusy=true;render();
+      try{
+        const result=await api('/meeting-draft',{body:{provider:'deepseek',model_id:$('#meeting-model')?.value||view().localModel||'deepseek-v4.1-flash',transcript,title:meeting.title,date:meeting.date,participants:meeting.participants}});
+        const normalized=formatMinuteText(result.summary||'');
+        await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{summary:normalized}});
+        view().drafts.set(String(id),{summary:normalized,actions:[],warnings:result.warnings||[],mode:'ai',model:result.model||''});
+        await refreshData();notify('纪要已整理并自动保存。可编辑后直接导出 Word / PDF。');
+      }finally{view().meetingAiBusy=false;render();}
+    });
+  }
+  async function autoSaveMeeting(form){
+    const id=form.dataset.id;const summary=$('#meeting-summary',form)?.value??'';const state=view();
+    state.meetingSaveState='正在保存…';
+    try{await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{summary}});const draft=state.drafts.get(String(id));if(draft)draft.summary=summary;state.meetingSaveState='已自动保存到本机与 OneDrive';const label=$('#meeting-save-state');if(label)label.textContent=state.meetingSaveState;}
+    catch(error){state.meetingSaveState='保存失败：'+error.message;const label=$('#meeting-save-state');if(label)label.textContent=state.meetingSaveState;}
+  }
+  async function exportMeeting(id,format,button){
+    const meeting=record('meetings',id);if(!meeting)return;
+    const summary=$('#meeting-summary')?.value;
+    if(summary!=null&&summary!==meeting.summary){await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{summary}});await refreshData();}
+    const title=encodeURIComponent(meeting.title+' Expert Call Notes');
+    await withBusy(button,'正在生成…',()=>download('/meeting-export/'+encodeURIComponent(id)+'?format='+format,title+(format==='pdf'?'.pdf':'.docx')));
   }
   async function generateMeetingDraft(id, button) {
     const meeting = record('meetings', id);
@@ -912,9 +955,12 @@
     bindSubmit('agent-form', runAgent);
     $('#agent-input')?.addEventListener('input', event => { view().agentMessage = event.target.value; });
     bindSubmit('ask-form', askQuestion); bindSubmit('meeting-summary-form', saveMeetingSummary); bindSubmit('meeting-actions-form', createMeetingTasks); bindSubmit('finance-form', calculateFinance); bindSubmit('ai-settings-form', saveAISettings);
+    bindSelect('meeting-model', value => { const state=view(); state.meetingModel=value; try{localStorage.setItem('local-workos:meeting-model',value);}catch{/* Optional preference. */} });
     bindSelect('valuation-method', value => { const state = view(); state.valuationMethod = value; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationError = ''; render(); });
     bindSelect('valuation-project', value => { view().valuationProjectId = value; });
     bindSelect('valuation-model', value => { view().valuationModel = value; try { localStorage.setItem('local-workos:dsh-model', value); } catch { /* Optional preference. */ } });
+    $('#meeting-transcript-input')?.addEventListener('input', event => { view().meetingTranscriptDraft=event.target.value; });
+    $('#meeting-summary')?.addEventListener('input', event => { const state=view(); const form=$('#meeting-summary-form'); if(!form)return; clearTimeout(state.meetingSaveTimer); const label=$('#meeting-save-state'); if(label)label.textContent='正在编辑…'; state.meetingSaveTimer=setTimeout(()=>autoSaveMeeting(form),700); });
     $('#valuation-text')?.addEventListener('input', event => { const state = view(); state.valuationText = event.target.value; if (state.valuationProposal) { state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; $('.valuation-review')?.remove(); $('.valuation-result')?.remove(); } });
     $('#valuation-json')?.addEventListener('input', event => { view().valuationJson = event.target.value; view().valuationResult = null; $('.valuation-result')?.remove(); });
     $('#meeting-summary')?.addEventListener('input', () => { captureMeetingDraft(); $('#meeting-save-state').textContent = '尚未保存，请保存纪要'; });
@@ -940,7 +986,7 @@
   }
   function captureMeetingDraft() {
     const form = $('#meeting-summary-form'); if (!form) return;
-    const id = String(form.dataset.id); const draft = view().drafts.get(id) || { summary: '', actions: [], mode: 'rules' };
+    const id = String(form.dataset.id); const draft = view().drafts.get(id) || { summary: '', actions: [], mode: 'ai' };
     draft.summary = $('#meeting-summary').value;
     const actionForm = $('#meeting-actions-form');
     if (actionForm) draft.actions.forEach((action, index) => {
@@ -985,6 +1031,10 @@
       case 'note-deliverable': return deliverFromNote(id);
       case 'select-meeting': captureMeetingDraft(); view().meetingId = id; render(); return;
       case 'meeting-draft': return generateMeetingDraft(id, button);
+      case 'meeting-ai-draft': return generateExpertNotes(id, button);
+      case 'meeting-export': return exportMeeting(id, button.dataset.format, button);
+      case 'meeting-ai-draft': return generateExpertNotes(id, button);
+      case 'meeting-export': return exportMeeting(id, button.dataset.format, button);
       case 'meeting-deliverable': return deliverFromMeeting(id);
       case 'meeting-new-task': { const meeting = record('meetings', id); return editRecord('tasks', '', { meeting_id: id, project_id: meeting?.project_id || '' }); }
       case 'memory-category': view().memoryCategory = button.dataset.value; render(); return;
