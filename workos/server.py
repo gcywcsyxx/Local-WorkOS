@@ -139,8 +139,10 @@ class Application:
   if fmt not in ('docx','pdf'):raise ValueError('只支持 DOCX / PDF')
   summary=str(meeting.get('summary') or '').strip()
   if not summary:raise ValueError('先粘贴转写并生成纪要，再导出')
-  title=str(meeting.get('title') or 'Expert Call Notes')[:200]
-  docx_bytes=expert_minutes_docx(title,summary,str(meeting.get('participants') or ''),str(meeting.get('date') or ''))
+  title=str(meeting.get('title') or 'Expert Call Notes')[:180]
+  participants=str(meeting.get('participants') or '').strip();date_text=str(meeting.get('date') or '').strip()
+  if participants and '【专家背景】' in summary:summary=summary.replace('【专家背景】','【专家背景】\n专家身份：'+participants,1)
+  docx_bytes=expert_minutes_docx(title,summary,'',date_text)
   if fmt=='docx':return docx_bytes
   # Use only the bundled LibreOffice Kit; never fall back to system soffice.
   cli=Path(os.environ.get('WORKOS_LIBREOFFICE_CLI','')) if os.environ.get('WORKOS_LIBREOFFICE_CLI') else None

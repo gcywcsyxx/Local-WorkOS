@@ -262,6 +262,10 @@ class ServerTests(unittest.TestCase):
         for required in ('Synthetic Expert Call Notes','专家背景','专家点评','访谈内容','• 合成判断。','o 仍需验证','➢ 合成细节。','Synthetic participant'):
             self.assertIn(required,text)
         self.assertEqual(round(doc.sections[0].page_width.cm,1),21.0)
+        self.assertEqual(round(doc.sections[0].page_height.cm,1),29.7)
+        self.assertEqual(round(doc.sections[0].top_margin.cm,1),2.2)
+        self.assertEqual(doc.paragraphs[1].text,'2026-01-01')
+        self.assertEqual(sum(p.text=='2026-01-01' for p in doc.paragraphs),1)
 
     def test_meeting_ai_draft_uses_only_selected_transcript(self):
         meeting=self.create('meetings',{'title':'Synthetic Call','transcript':'synthetic transcript only'})
