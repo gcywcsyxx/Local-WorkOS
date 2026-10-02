@@ -946,7 +946,6 @@
     $('#meeting-summary')?.addEventListener('input', event => { const state=view(); const form=$('#meeting-summary-form'); if(!form)return; clearTimeout(state.meetingSaveTimer); const label=$('#meeting-save-state'); if(label)label.textContent='正在编辑…'; state.meetingSaveTimer=setTimeout(()=>autoSaveMeeting(form),700); });
     $('#valuation-text')?.addEventListener('input', event => { const state = view(); state.valuationText = event.target.value; if (state.valuationProposal) { state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; $('.valuation-review')?.remove(); $('.valuation-result')?.remove(); } });
     $('#valuation-json')?.addEventListener('input', event => { view().valuationJson = event.target.value; view().valuationResult = null; $('.valuation-result')?.remove(); });
-    $('#meeting-summary')?.addEventListener('input', () => { captureMeetingDraft(); $('#meeting-save-state').textContent = '尚未保存，请保存纪要'; });
     $('#meeting-actions-form')?.addEventListener('input', captureMeetingDraft);
     bindSubmit('deliverable-form', async form => withBusy($('button[type="submit"]', form), '正在保存…', async () => { if (await saveDeliverable(form)) notify('交付修改已保存。'); }));
     const editor = $('#deliverable-form');
