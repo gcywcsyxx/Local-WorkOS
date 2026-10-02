@@ -58,6 +58,11 @@ def main():
   configure_sync_env(env)
   env['PYTHONPATH']=str(ROOT/'vendor')+os.pathsep+env.get('PYTHONPATH','')
   env['PYTHONDONTWRITEBYTECODE']='1'
+  bundled_root=Path(os.environ.get('LOCALAPPDATA',''))/'Programs'/'DeepSeek Harness'/'resources'/'app.asar.unpacked'/'dsh'/'node_modules'/'@deepseek-ai'
+  bundled_cli=bundled_root/'libreoffice-kit'/'lib'/'cli.js'
+  bundled_node=Path.home()/'.dsh'/'dsh-runtimes'/'dsh-primary-runtime'/'dependencies'/'node'/'bin'/'node.exe'
+  if bundled_cli.is_file() and bundled_node.is_file():
+   env.setdefault('WORKOS_LIBREOFFICE_CLI',str(bundled_cli));env.setdefault('WORKOS_NODE',str(bundled_node))
   selected=shutil.which(args.python)
   if not selected:
    notify('无法找到指定的 Python。请通过 --python 指定现有 Python 3.11+。');return 1
