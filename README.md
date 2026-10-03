@@ -13,7 +13,7 @@ A local-first research and project workspace with evidence-grounded retrieval, m
 
 部分下文为历史说明；最新功能与安全契约以上述PRD和交接指南为准。
 
-1.5.3 修复发布/重启后旧页面的会话校验错误：对明确未执行的过期令牌请求自动更新并重试一次，保留已输入内容。
+1.6.0 支持 AI 输入框 Enter 发送、Shift+Enter 换行及随时停止。停止后保留输入、阻止迟到结果与后续保存；已完成的操作保留。发布/重启后的过期会话自动恢复。
 
 ## 启动 / Run
 

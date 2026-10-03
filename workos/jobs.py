@@ -15,6 +15,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from .store import now
 from .workflows import RECIPES, _selected_documents, _project_context, provider_identity
+from .cancellation import CancellationToken, OperationRegistry, CancelledError, bind_token, check_cancelled
 
 STAGES = [('prepare', '准备资料'), ('generate', '生成正文'), ('check', '检查要求'),
           ('review', '复核内容'), ('repair', '修订问题'), ('save', '保存草稿')]
@@ -35,9 +36,10 @@ def _identity(doc):
 
 
 class FrozenStore:
-    def __init__(self, real, snapshot, generation_id, active_check=None):
+    def __init__(self, real, snapshot, generation_id, active_check=None, token=None):
         self.real, self.snapshot, self.generation_id = real, snapshot, generation_id
         self.active_check = active_check
+        self.token = token
 
     def get(self, collection, item_id):
         for item in self.snapshot.get(collection, []):
@@ -49,6 +51,7 @@ class FrozenStore:
         return copy.deepcopy(self.snapshot.get(collection, []))
 
     def validate_current(self):
+        if self.token: self.token.check()
         if self.active_check and not self.active_check():
             raise ValueError('服务重启中断了任务；未保存后台结果')
         if self.snapshot.get('projects'):
@@ -74,7 +77,8 @@ class FrozenStore:
     def create(self, collection, data):
         if collection != 'deliverables':
             raise ValueError('后台工作只能保存交付草稿')
-        with self.real.lock:
+        from contextlib import nullcontext
+        with (self.token.guard() if self.token else nullcontext()), self.real.lock:
             saved = next((row for row in self.real.list('deliverables')
                           if row.get('generation_id') == self.generation_id), None)
             if saved:
@@ -94,6 +98,8 @@ class WorkflowJobs:
                         'snapshot TEXT NOT NULL, state TEXT NOT NULL, UNIQUE(workspace,request_id))')
         self.db.commit()
         self.closed = False
+        self.cancellations = OperationRegistry(max_active=max_active)
+        self.tokens = {}
         self.executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='workos-draft')
         with self.lock:
             for job_id, workspace, raw in self.db.execute('SELECT id,workspace,state FROM jobs').fetchall():
@@ -206,7 +212,10 @@ class WorkflowJobs:
                 if existing[0] != fingerprint: raise ValueError('请求编号已用于不同工作要求，请创建新任务')
                 return json.loads(existing[1])
             self._capacity()
+            token = self.cancellations.token(workspace, request_id)
+            token.check()
             snapshot = self._capture(workspace, body)
+            token.check()
             job_id = uuid.uuid4().hex
             state = {'id': job_id, 'workflow_key': body.get('workflow_key') or body.get('key'),
                      'project_id': body.get('project_id') or '', 'message': body.get('message') or body.get('question'),
@@ -219,6 +228,8 @@ class WorkflowJobs:
             with self.db:
                 self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',
                     (job_id, workspace, request_id, fingerprint, encoded, _encoded(snapshot), _encoded(state)))
+            self.tokens[job_id] = token
+            token.pinned = True
             self.executor.submit(self._execute, workspace, job_id)
             return copy.deepcopy(state)
 
@@ -238,13 +249,52 @@ class WorkflowJobs:
             state.update(status='queued', stage='prepare', error='', retryable=False)
             state['stages'] = [{'key': key, 'label': label, 'status': 'pending', 'detail': ''} for key, label in STAGES]
             self._write(job_id, state)
+            self.tokens[job_id] = CancellationToken(payload['request_id'])
             self.executor.submit(self._execute, workspace, job_id)
             return copy.deepcopy(state)
 
+    def cancel_request(self, workspace, request_id):
+        from .cancellation import validate_request_id
+        validate_request_id(request_id)
+        if workspace not in self.app.stores: raise ValueError('工作区选择不正确')
+        with self.lock:
+            row = self.db.execute('SELECT id FROM jobs WHERE workspace=? AND request_id=?',
+                                  (workspace, request_id)).fetchone()
+        if row: return {'job': self.cancel(workspace, row[0])}
+        return self.cancellations.cancel(workspace, request_id)
+
+    def cancel(self, workspace, job_id):
+        # Do not hold jobs.lock while waiting for the token/Store commit guard.
+        # FrozenStore.create never acquires jobs.lock inside Store.lock.
+        with self.lock:
+            state = self._row(workspace, job_id)[2]
+            if state['status'] not in ACTIVE: return state
+            token = self.tokens.get(job_id)
+        if token: token.cancel()
+        with self.lock:
+            state = self._row(workspace, job_id)[2]
+            if state['status'] not in ACTIVE: return state
+            saved = self._saved(workspace, job_id)
+            if saved:
+                state.update(status='completed', result=self._recover(saved, state), error='', retryable=False)
+            else:
+                state.update(status='cancelled', error='已停止本次工作；草稿未保存', retryable=False)
+            for item in state['stages']:
+                if item['status'] == 'running':
+                    item['status'] = 'completed' if saved else 'cancelled'
+            self._write(job_id, state)
+            if token: token.pinned = False
+            self.tokens.pop(job_id, None)
+            result = copy.deepcopy(state)
+        if saved: self.app.sync_workspace(workspace)
+        return result
+
     def _progress(self, workspace, job_id, stage, detail='', status='running'):
+        check_cancelled()
         with self.lock:
             if self.closed: raise ValueError('服务重启中断了任务；未保存后台结果')
             state = self._row(workspace, job_id)[2]
+            if state['status'] == 'cancelled': raise CancelledError()
             if state['status'] not in ACTIVE: return
             for item in state['stages']:
                 if item['key'] == stage:
@@ -259,31 +309,44 @@ class WorkflowJobs:
         with self.lock:
             if self.closed: return
             payload, snapshot, state = self._row(workspace, job_id)
+            if state['status'] not in ACTIVE: return
+            token = self.tokens.setdefault(job_id, CancellationToken(payload['request_id']))
             payload['_provider_identity'] = snapshot.get('provider_identity')
         try:
-            frozen = FrozenStore(self.app.stores[workspace], snapshot, job_id, active_check=lambda: not self.closed)
+            frozen = FrozenStore(self.app.stores[workspace], snapshot, job_id, active_check=lambda: not self.closed, token=token)
             frozen.validate_current()
             if snapshot.get('provider_identity') != provider_identity(self.app, payload):
                 raise ValueError('模型服务配置已变更，请重新创建任务；没有自动切换模型')
-            result = run_workflow(self.app, frozen, payload,
-                progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
+            with bind_token(token):
+                with token.guard(): token.status = 'running'
+                result = run_workflow(self.app, frozen, payload,
+                    progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
             with self.lock:
                 if self.closed: return
                 state = self._row(workspace, job_id)[2]
+                if state['status'] not in ACTIVE: return
                 state.update(status='completed', stage='save', result=result, retryable=False, error='')
                 for item in state['stages']:
                     if item['status'] == 'running': item['status'] = 'completed'
                     elif item['status'] == 'pending': item['status'] = 'skipped'
                 self._write(job_id, state)
+                token.status = 'completed'
+                token.pinned = False
+                self.tokens.pop(job_id, None)
             self.app.sync_workspace(workspace)
         except Exception as exc:
             logging.warning('Background workflow failed (%s)', type(exc).__name__)
             with self.lock:
                 if self.closed: return
                 state = self._row(workspace, job_id)[2]
+                if state['status'] not in ACTIVE: return
                 saved = self._saved(workspace, job_id)
                 if saved:
                     state.update(status='completed', result=self._recover(saved, state), retryable=False, error='')
+                elif isinstance(exc, CancelledError):
+                    state.update(status='cancelled', error='已停止本次工作；草稿未保存', retryable=False)
+                    for item in state['stages']:
+                        if item['status'] == 'running': item['status'] = 'cancelled'
                 else:
                     # Never surface provider internals, prompts, credentials or source excerpts.
                     if state['stage'] in ('prepare', 'save') and isinstance(exc, (ValueError, KeyError)):
@@ -295,7 +358,11 @@ class WorkflowJobs:
                     state.update(status='failed', error=safe, retryable=True)
                     for item in state['stages']:
                         if item['status'] == 'running': item['status'] = 'failed'
+                    token.status = 'failed'
                 self._write(job_id, state)
+                token.status = state['status']
+                token.pinned = False
+                self.tokens.pop(job_id, None)
 
     def begin_shutdown(self):
         with self.lock:

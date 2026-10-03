@@ -27,6 +27,9 @@ def main():
     _, client = get('http://127.0.0.1:18866/api-client.js')
     if b'/api-client.js' not in shell or b'WorkOSApiClient' not in client or b'csrf_expired' not in client:
         raise ValueError('The installed session recovery client is unavailable')
+    _, ui = get('http://127.0.0.1:18866/app.js')
+    if b'ai-run-controls' not in shell or b'X-WorkOS-Request-ID' not in ui or b'bindAiComposer' not in ui:
+        raise ValueError('The installed keyboard and stop controls are unavailable')
     origin = env.get('WORKOS_PUBLIC_ORIGIN', '').rstrip('/')
     _, body = get('http://127.0.0.1:18866/api/sync/status')
     sync = json.loads(body)
@@ -52,7 +55,7 @@ def main():
                     raise ValueError('Anonymous API denial returned an unexpected status') from None
             else:
                 raise ValueError('Anonymous public workspace access was allowed')
-    print(json.dumps({'local_workflows': 'ok', 'session_recovery_client': 'ok', 'public_login_and_anonymous_denial': 'ok' if origin else 'not-configured'}))
+    print(json.dumps({'local_workflows': 'ok', 'session_recovery_client': 'ok', 'ai_keyboard_and_stop_controls': 'ok', 'public_login_and_anonymous_denial': 'ok' if origin else 'not-configured'}))
 
 
 if __name__ == '__main__':

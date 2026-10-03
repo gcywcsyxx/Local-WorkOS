@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from workos.dsh_harness import evidence_packet, parse_completion, validate_trace, overlay, run, PLUGIN
+from workos.cancellation import CancellationToken, CancelledError, bind_token, check_cancelled
 
 MODELS = {'synthetic-model':('Synthetic',272000,8000)}
 
@@ -143,6 +144,58 @@ sys.exit(1 if mode=='failed' else 0)
         app = self.fake_app()
         with patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':'timeout'}),self.assertRaisesRegex(ValueError,'工作已取消'):
             self.run_fake(app,progress_callback=lambda event:False)
+        self.assertFalse(app.dsh_lock.locked())
+
+    def test_cancellation_during_delayed_lock_acquisition_never_starts_process(self):
+        app = self.fake_app()
+        token = CancellationToken('synthetic-acquisition-stop')
+        real_lock, entered = threading.Lock(), threading.Event()
+        real_lock.acquire()
+        class GatedLock:
+            def acquire(self, blocking=False):
+                # Production currently rejects a busy lock. This real blocking
+                # seam exercises Stop during an acquisition delay independently
+                # of that policy, before the runner may launch a provider.
+                entered.set()
+                if not real_lock.acquire(timeout=3):
+                    raise RuntimeError('Synthetic acquisition barrier timeout')
+                return True
+            def release(self):real_lock.release()
+        app.dsh_lock = GatedLock()
+        errors = []
+        def execute():
+            try:
+                with bind_token(token):
+                    check_cancelled()  # Application's pre-run check has passed.
+                    run(app,'Synthetic task','synthetic-model',MODELS)
+            except Exception as error:errors.append(error)
+        with patch('workos.dsh_harness.subprocess.Popen') as provider:
+            worker = threading.Thread(target=execute)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(worker.is_alive())
+                token.cancel()
+            finally:
+                real_lock.release()
+                worker.join(3)
+            self.assertFalse(worker.is_alive())
+            provider.assert_not_called()
+        self.assertEqual(len(errors),1)
+        self.assertIsInstance(errors[0],CancelledError)
+        self.assertFalse(real_lock.locked())
+
+    def test_cancellation_during_session_preparation_never_starts_process(self):
+        app = self.fake_app()
+        token = CancellationToken('synthetic-preparation-stop')
+        def prepare(*args,**kwargs):
+            token.cancel()
+            return overlay(*args,**kwargs)
+        with patch('workos.dsh_harness.overlay',side_effect=prepare), \
+             patch('workos.dsh_harness.subprocess.Popen') as provider:
+            with self.assertRaises(CancelledError),bind_token(token):
+                run(app,'Synthetic task','synthetic-model',MODELS)
+            provider.assert_not_called()
         self.assertFalse(app.dsh_lock.locked())
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the lifecycle launcher test')

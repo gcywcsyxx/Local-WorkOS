@@ -26,6 +26,8 @@ from .store import Store,COLLECTIONS
 from .memory import find_root,scan,import_memories,import_uploaded_memory
 from .exports import markdown,html_report,docx_report
 from .sync import OneDriveMirror
+from .cancellation import (OperationRegistry, CancellationStore, CancelledError,
+                           OperationConflict, check_cancelled, cancellation_progress)
 
 ROOT=Path(__file__).resolve().parents[1]
 MAX_BODY=28_000_000
@@ -111,6 +113,7 @@ class Application:
   self.dsh_lock=threading.Lock()
   from .workflow_runs import WorkflowRuns
   self.workflow_runs=WorkflowRuns()
+  self.operations=OperationRegistry()
   self._jobs=None
   self.jobs_lock=threading.Lock()
   self.stopping=False
@@ -124,6 +127,7 @@ class Application:
    return self._jobs
 
  def begin_shutdown(self):
+  self.operations.shutdown()
   with self.jobs_lock:
    self.stopping=True
    if self._jobs is not None:self._jobs.begin_shutdown()
@@ -133,11 +137,12 @@ class Application:
   if self._jobs is not None:self._jobs.close()
   for store in self.stores.values():store.close()
 
- def run_workflow(self,workspace,body):
+ def run_workflow(self,workspace,body,store=None):
   from .workflows import run_workflow
   if workspace not in self.stores:raise ValueError('工作区选择不正确')
   def execute():
-   result=run_workflow(self,self.stores[workspace],body)
+   result=run_workflow(self,store or self.stores[workspace],body)
+   check_cancelled()
    self.sync_workspace(workspace)
    return result
   return self.workflow_runs.run(workspace,body,execute)
@@ -226,6 +231,32 @@ class Application:
    if not pdf.startswith(b'%PDF-'):raise ValueError('PDF 转换结果不是有效 PDF')
    return pdf
 
+ def meeting_draft_and_save(self,body,store,workspace):
+  meeting_id=body.get('save_meeting_id')
+  if meeting_id is None:return self.meeting_draft(body,store)
+  if not isinstance(meeting_id,str) or not meeting_id or len(meeting_id)>100:raise ValueError('会议编号不正确')
+  original=store.get('meetings',meeting_id)
+  if body.get('project_id') and original.get('project_id')!=body['project_id']:raise ValueError('会议不属于当前项目')
+  draft=self.meeting_draft(body,store)
+  check_cancelled()
+  summary=str(draft.get('summary') or '')
+  summary=re.sub(r'(^|\n)[•\-]\s*',r'\1• ',summary)
+  summary=re.sub(r'(^|\n)o\s+',r'\1o ',summary)
+  summary=re.sub(r'(^|\n)[➢➤]\s*',r'\1➢ ',summary)
+  summary=re.sub(r'([\d])\s*[–—]\s*([\d])',r'\1-\2',summary)
+  from contextlib import nullcontext
+  token=store.token if isinstance(store,CancellationStore) else None
+  with (token.guard() if token else nullcontext()),store.lock:
+   if store.get('meetings',meeting_id)!=original:raise ValueError('会议记录在生成期间已变更；没有覆盖现有纪要，请重新整理')
+   store.update('meetings',meeting_id,{'transcript':body.get('transcript',''),'summary':summary,
+    'experts':draft.get('experts',[]),'matrix':draft.get('matrix',{}),'contents':draft.get('contents',[])})
+   if token:
+    # The committed save wins a subsequent Stop. Mark it under the same guard.
+    token.status='completed'
+    token.completed_metadata={'saved':True,'meeting_id':meeting_id}
+  self.sync_workspace(workspace)
+  return {**draft,'summary':summary,'saved':True,'meeting_id':meeting_id}
+
 
  def parse_model_assumptions(self,body):
   from .valuation import ASSUMPTION_SCHEMAS,missing_assumptions,parse_assumption_json
@@ -265,7 +296,10 @@ class Application:
 
  def dsh_answer(self,prompt,model):
   from .dsh_harness import run
-  return run(self,prompt,model,DSH_MODELS)[0]
+  check_cancelled()
+  result=run(self,prompt,model,DSH_MODELS,progress_callback=cancellation_progress())[0]
+  check_cancelled()
+  return result
 
  def dsh_harness_answer(self,system,user,model,docs,coverage,progress_callback=None):
   from .dsh_harness import run
@@ -275,7 +309,10 @@ class Application:
    '仅可调用这四个工具，不能调用文件、网络、终端或子代理。预算最多200000字符和128次工具调用；'
    '未读范围属于资料缺口，不声称完成全材料核验。根据证据生成用户指定范围的Markdown草稿，使用[S1]等给定引用。'
    '最后用workos_check_draft检查拟交付的准确正文；检查通过后，最终答复必须逐字返回该正文，不再加前言或工具说明。')
-  return run(self,prompt,model,DSH_MODELS,docs=docs,coverage=coverage,progress_callback=progress_callback,timeout=360)
+  check_cancelled()
+  result=run(self,prompt,model,DSH_MODELS,docs=docs,coverage=coverage,progress_callback=cancellation_progress(progress_callback),timeout=360)
+  check_cancelled()
+  return result
 
 
  def ai_public(self):
@@ -283,6 +320,7 @@ class Application:
    return {'configured':bool(self.ai['base_url'] and self.ai['model']),'base_url':self.ai['base_url'],'model':self.ai['model'],'presets':[{'id':key,'label':value['label'],'base_url':value['base_url'],'models':[{'id':m[0],'name':m[1],'context':m[2]} for m in value['models']]} for key,value in LOCAL_AI_PRESETS.items()],'default_model':LOCAL_DEFAULT_MODEL}
 
  def local_chat(self,base_url,model,system,user,max_tokens=1600,timeout=65,api_key_snapshot=None):
+  check_cancelled()
   payload={'model':model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],'temperature':0.2,'max_tokens':max_tokens}
   headers={'Content-Type':'application/json'}
   with self.ai_lock:api_key=self.ai.get('api_key','') if api_key_snapshot is None else api_key_snapshot
@@ -292,10 +330,13 @@ class Application:
    with urllib.request.urlopen(request,timeout=timeout) as response:
     raw=response.read(2_000_001)
   except urllib.error.HTTPError as exc:
+   check_cancelled()
    detail=exc.read(400).decode('utf-8','replace')
    raise ValueError('本机模型接口返回 '+str(exc.code)+'；请确认本地模型服务已启动（例如 CodeBuddy/WorkBuddy 桥接）且该模型已开通。'+detail[:200]) from exc
   except (urllib.error.URLError,TimeoutError,OSError) as exc:
+   check_cancelled()
    raise ValueError('无法连接本机模型服务；请确认本地模型桥接进程在运行。') from exc
+  check_cancelled()
   if len(raw)>2_000_000:raise ValueError('模型返回内容过大')
   try:
    parsed=json.loads(raw);choice=parsed['choices'][0];answer=choice['message']['content']
@@ -486,6 +527,8 @@ class Handler(BaseHTTPRequestHandler):
   if isinstance(exc,TooManyLogins):
    self.response_headers={'Retry-After':'600'};return self.respond({'error':str(exc)},429)
   if isinstance(exc,CsrfExpired):return self.respond({'error':str(exc),'code':'csrf_expired'},403)
+  if isinstance(exc,CancelledError):return self.respond({'error':str(exc),'code':'request_cancelled','steps':exc.steps},409)
+  if isinstance(exc,OperationConflict):return self.respond({'error':str(exc),'code':'operation_conflict'},409)
   if isinstance(exc,PermissionError):self.respond({'error':str(exc)},403)
   elif isinstance(exc,OriginalUnavailable):self.respond({'error':exc.args[0],'code':'original_unavailable'},404)
   elif isinstance(exc,KeyError):self.respond({'error':'记录不存在'},404)
@@ -589,6 +632,10 @@ class Handler(BaseHTTPRequestHandler):
  def do_POST(self):self.mutate('POST')
  def do_PATCH(self):self.mutate('PATCH')
  def do_DELETE(self):self.mutate('DELETE')
+ def ai_operation(self,workspace,store,execute):
+  request_id=self.headers.get('X-WorkOS-Request-ID')
+  return self.app.operations.run(workspace,request_id,
+   lambda token:execute(CancellationStore(store,token) if token else store))
  def mutate(self,method):
   try:
    path=urllib.parse.urlsplit(self.path).path
@@ -597,6 +644,8 @@ class Handler(BaseHTTPRequestHandler):
    mode=self.workspace();store=self.app.stores[mode]
    body=self.json_body() if method!='DELETE' else {}
    if method=='POST':
+    match=re.fullmatch(r'/api/operations/([a-zA-Z0-9_-]{1,100})/cancel',path)
+    if match:return self.respond(self.app.operations.cancel(mode,match.group(1)))
     if path=='/api/upload':
      from .engine import parse_upload,chunk_text
      name=body.get('name');encoded=body.get('base64');kind=body.get('kind','research')
@@ -627,16 +676,19 @@ class Handler(BaseHTTPRequestHandler):
      record['warnings']=parsed.get('warnings',[])
      self.app.sync_workspace(mode)
      return self.respond(record,201)
-    if path=='/api/ask':return self.respond(self.app.ask(store,body))
+    if path=='/api/ask':return self.respond(self.ai_operation(mode,store,lambda scoped:self.app.ask(scoped,body)))
     if path=='/api/workflows/plan':
      from .workflows import plan_workflow
-     return self.respond(plan_workflow(body.get('message','')))
+     return self.respond(self.ai_operation(mode,store,lambda scoped:plan_workflow(body.get('message',''))))
     if path=='/api/workflows/run':
      from .workflow_runs import WorkflowBusy
-     try:result=self.app.run_workflow(mode,body)
+     try:result=self.ai_operation(mode,store,lambda scoped:self.app.run_workflow(mode,body,scoped))
      except WorkflowBusy as exc:return self.respond({'error':str(exc),'code':'workflow_busy'},409)
      return self.respond(result,201)
     if path=='/api/workflows/jobs':return self.respond({'job':self.app.jobs().submit(mode,body)},202)
+    if path=='/api/workflows/jobs/cancel':return self.respond(self.app.jobs().cancel_request(mode,body.get('request_id')))
+    match=re.fullmatch(r'/api/workflows/jobs/([a-f0-9]{32})/cancel',path)
+    if match:return self.respond({'job':self.app.jobs().cancel(mode,match.group(1))})
     match=re.fullmatch(r'/api/workflows/jobs/([a-f0-9]{32})/retry',path)
     if match:return self.respond({'job':self.app.jobs().retry(mode,match.group(1))},202)
     if path=='/api/meeting-transcript-extract':
@@ -649,13 +701,13 @@ class Handler(BaseHTTPRequestHandler):
      parsed=parse_upload(Path(name).name,raw)
      return self.respond({'name':Path(name).name,'transcript':parsed.get('content',''),'warnings':parsed.get('warnings',[])})
     if path=='/api/meeting-draft':
-     return self.respond(self.app.meeting_draft(body,store))
+     return self.respond(self.ai_operation(mode,store,lambda scoped:self.app.meeting_draft_and_save(body,scoped,mode)))
     if path=='/api/agent':
      from .agent import agent_turn
-     result=agent_turn(self.app,store,body)
+     result=self.ai_operation(mode,store,lambda scoped:agent_turn(self.app,scoped,body))
      if result.get('steps'):self.app.sync_workspace(mode)
      return self.respond(result)
-    if path=='/api/model/parse-assumptions':return self.respond(self.app.parse_model_assumptions(body))
+    if path=='/api/model/parse-assumptions':return self.respond(self.ai_operation(mode,store,lambda scoped:self.app.parse_model_assumptions(body)))
     if path=='/api/model/valuation':
      from .valuation import calculate_valuation
      return self.respond(calculate_valuation(body.get('method'),body.get('assumptions')))

@@ -21,6 +21,7 @@ $env:WORKOS_TEST_PYTHON=$Python
 Run-Checked $Python @('-m','unittest','discover','-s','tests')
 Run-Checked 'node' @('tests/test_markdown.cjs')
 Run-Checked 'node' @('tests/test_api_client.cjs')
+Run-Checked 'node' @('tests/test_ai_controls.cjs')
 Run-Checked 'node' @('tests/browser_auth_client.cjs')
 Run-Checked 'node' @('tests/browser_research_cdp.cjs')
 if($CommitMessage){Run-Checked 'git' @('add','-A')}

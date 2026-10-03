@@ -2,8 +2,8 @@ param([string]$Python='')
 $ErrorActionPreference='Stop'
 $source=Split-Path -Parent $PSScriptRoot
 if(-not $env:LOCALAPPDATA -or -not $env:APPDATA){throw 'Windows standard application-data locations are required.'}
-$destination=Join-Path $env:LOCALAPPDATA 'Programs\LocalWorkOS\1.5.3'
-$releaseVersion='1.5.3'
+$destination=Join-Path $env:LOCALAPPDATA 'Programs\LocalWorkOS\1.6.0'
+$releaseVersion='1.6.0'
 
 # Use the user's existing Python. Never install packages or touch other apps.
 $candidates=@()

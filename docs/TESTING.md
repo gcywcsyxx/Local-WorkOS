@@ -4,6 +4,12 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.6.0 Enter-send and stopping AI work, 2026-10-04
+
+- Real HTTP and blocked-provider fixtures cover cancel before arrival/acknowledgement, queued/running durable jobs, late compatible-model output, DSH cancellation, agent partial commits, atomic meeting save, edited-meeting protection, cancel-vs-save ordering, terminal persistence after restart, workspace/CSRF/auth and bounded registries. No production model calls are used.
+- Browser regressions exercise actual Enter/Shift+Enter, IME/key229 and key repeat, all research modes and homepage staging, retained drafts, new request identity, stop across navigation, pending task registration, queued/running jobs, failed stop and retry, late ask/action/meeting/valuation responses, normal editor newlines and mobile overflow.
+- Eight isolated Node groups execute the real AI run/composer helpers and check old-result/finally ownership, per-run aborts, request IDs, retryable stop failures, unrelated work, context guards and keyboard behavior. Stopping cannot revoke an already accepted provider request; no late work is saved.
+
 ### 1.5.3 session recovery, 2026-10-04
 
 - Real HTTP fixtures verify that stale CSRF rejection happens before writes, job creation or provider calls; Host/Origin, login and other permission failures cannot carry the recovery code.
@@ -55,6 +61,7 @@ A synthetic canary was sent through the integrated DSH → GPT-6 Luna route and 
 ```shell
 node tests/test_markdown.cjs
 node tests/test_api_client.cjs
+node tests/test_ai_controls.cjs
 node tests/browser_auth_client.cjs
 node tests/browser_research_cdp.cjs
 ```

@@ -14,7 +14,9 @@ const root = path.resolve(__dirname, '..');
 const chromeExecutable = process.env.WORKOS_TEST_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const failures = [], requests = [], originalRequests = [], runtimeErrors = [], interceptionErrors = [];
-const workflowJobs = new Map(), workflowRequestKeys = new Map();
+const workflowJobs = new Map(), workflowRequestKeys = new Map(), workflowCancelTombstones = new Set();
+const auxiliaryModelMocks = new Map();
+const operationCancelFailures = new Map();
 const csrfScenario={enabled:false,seedStale:false,mode:'recover',bootstrapCalls:0,parseRequests:[],successfulModelCalls:0,expected:null,retryDom:null};
 let temp, server, chrome, cdp, origin, csrf, checks = 0;
 
@@ -114,6 +116,18 @@ async function fill(selector, text) {
 async function select(selector, value) {
   await cdp.evaluate(`(() => {const e=document.querySelector(` + q(selector) + `);if(!e)throw Error('Missing select');e.value=` + q(value) + `;e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
 }
+async function enter(selector,{shift=false,repeat=false}={}) {
+  await cdp.evaluate('document.querySelector('+q(selector)+').focus()');
+  const event={key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13,modifiers:shift?8:0};
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',...event,text:'\r',unmodifiedText:'\r',autoRepeat:repeat});
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',...event});
+}
+async function holdBrowserResponse(pathname) {
+  await cdp.evaluate(`(() => {if(window.__stopNativeFetch)throw Error('Prior response wrapper still active');window.__stopNativeFetch=window.fetch;window.__stopReplies=[];window.__stopSignals=[];window.fetch=async (...args)=>{const matches=new URL(args[0],location.href).pathname===${q(pathname)};if(matches)window.__stopSignals.push(args[1]?.signal);const response=await window.__stopNativeFetch(...args);if(matches)await new Promise(resolve=>window.__stopReplies.push(resolve));return response;};})()`);
+}
+async function releaseBrowserResponses() {
+  await cdp.evaluate("(() => {const original=window.__stopNativeFetch;if(original)window.fetch=original;window.__stopNativeFetch=null;const replies=window.__stopReplies||[];window.__stopReplies=[];replies.forEach(resolve=>resolve());})()");
+}
 async function route(name) {
   await cdp.evaluate('location.hash=' + q(name));
   const allowedHashes = name === 'projects' ? ['#projects', '#overview'] : ['#' + name];
@@ -154,11 +168,21 @@ async function finishMockWorkflow(meta){
   job.result={answer:text,citations:docs.map(item=>({document_id:item.id,title:item.title,quote:item.content.slice(0,100),ordinal:1})),coverage,deliverable,quality_report,workflow_key:job.workflow_key,mode:'model',limitations:['Synthetic mocked model response; no real model called.']};
   job.status='completed';job.stage='save';job.stages.forEach(stage=>stage.status='completed');job.updated_at=new Date().toISOString();job.revision++;
 }
+function cancelMockWorkflow(meta) {
+  if(['completed','failed','interrupted','cancelled'].includes(meta.job.status))return;
+  meta.hold=false;meta.job.status='cancelled';meta.job.error='';meta.job.retryable=false;meta.job.revision++;meta.job.updated_at=new Date().toISOString();
+  meta.job.stages.forEach(stage=>{if(stage.status==='running')stage.status='cancelled';else if(stage.status==='pending')stage.status='skipped';});
+}
 async function mockWorkflowRequest(event,url){
   if(!url.pathname.startsWith('/api/workflows/jobs'))return false;
   const workspace=Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workspace')?.[1]||'personal';
   if(url.pathname==='/api/workflows/jobs'&&event.request.method==='GET'){
     await fulfillJson(event,{jobs:[...workflowJobs.values()].filter(meta=>meta.workspace===workspace).map(meta=>meta.job).reverse()});return true;
+  }
+  if(url.pathname==='/api/workflows/jobs/cancel'&&event.request.method==='POST'){
+    const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body});
+    const key=workspace+':'+body.request_id;workflowCancelTombstones.add(key);const id=workflowRequestKeys.get(key),meta=id&&workflowJobs.get(id);
+    if(meta){cancelMockWorkflow(meta);await fulfillJson(event,{job:meta.job});}else await fulfillJson(event,{status:'cancelled',request_id:body.request_id});return true;
   }
   if(url.pathname==='/api/workflows/jobs'&&event.request.method==='POST'){
     const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body});
@@ -167,13 +191,18 @@ async function mockWorkflowRequest(event,url){
     const id=randomUUID(),stamp=new Date(body.message==='Synthetic durable running job'?Date.now()-120000:Date.now()).toISOString();
     const job={id,workflow_key:body.workflow_key,message:body.message,project_id:body.project_id,document_ids:body.document_ids,mode:body.mode,model_id:body.model_id,quality_mode:body.quality_mode,status:'queued',stage:'prepare',stages:mockStages(),revision:1,created_at:stamp,updated_at:stamp,poll_after_ms:1500,retryable:false};
     const documents=await Promise.all(body.document_ids.map(documentId=>api('documents/'+documentId)));
-    workflowJobs.set(id,{workspace,job,documents,reads:0,attempts:1,hold:body.message==='Synthetic durable running job',disconnectOnce:false});workflowRequestKeys.set(cacheKey,id);
+    const meta={workspace,job,documents,reads:0,attempts:1,hold:body.message==='Synthetic durable running job'||body.message.startsWith('Synthetic stoppable workflow'),disconnectOnce:false};
+    workflowJobs.set(id,meta);workflowRequestKeys.set(cacheKey,id);if(workflowCancelTombstones.has(cacheKey))cancelMockWorkflow(meta);
     await fulfillJson(event,{job},202);return true;
   }
   const parts=url.pathname.split('/'),meta=workflowJobs.get(parts[4]);
   if(!meta||meta.workspace!==workspace){await fulfillJson(event,{error:'Synthetic job not found'},404);return true;}
+  if(parts[5]==='cancel'&&event.request.method==='POST'){
+    requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});cancelMockWorkflow(meta);await fulfillJson(event,{job:meta.job});return true;
+  }
   if(parts[5]==='retry'&&event.request.method==='POST'){
     requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
+    if(meta.job.status==='cancelled'){await fulfillJson(event,{error:'Synthetic cancelled jobs require a new submission'},409);return true;}
     meta.attempts++;meta.reads=0;meta.hold=false;meta.job.status='queued';meta.job.error='';meta.job.retryable=false;meta.job.stage='prepare';meta.job.stages=mockStages();meta.job.revision++;
     await fulfillJson(event,{job:meta.job},202);return true;
   }
@@ -252,9 +281,17 @@ async function main() {
     }
     if (/^\/api\/documents\/[^/]+\/original$/.test(url.pathname)) originalRequests.push(url.pathname);
     if(url.pathname==='/api/workflows/plan') requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
+    if(/^\/api\/operations\/[^/]+\/cancel$/.test(url.pathname)){
+      requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
+      const id=url.pathname.split('/')[3],remaining=operationCancelFailures.get(id)||0;if(remaining){operationCancelFailures.set(id,remaining-1);return fulfillJson(event,{error:'Synthetic cancellation temporarily unavailable'},503);}
+      return fulfillJson(event,{status:'cancelled',steps:[]});
+    }
     if(await mockWorkflowRequest(event,url))return;
+    if(auxiliaryModelMocks.has(url.pathname)){
+      const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body});const mock=auxiliaryModelMocks.get(url.pathname);return fulfillJson(event,typeof mock==='function'?await mock(body):mock);
+    }
     if (['/api/ask', '/api/agent'].includes(url.pathname)) {
-      const body = JSON.parse(event.request.postData || '{}'); requests.push({ path: url.pathname, method: event.request.method, body });
+      const body = JSON.parse(event.request.postData || '{}'),operationId=Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workos-request-id')?.[1]; requests.push({ path: url.pathname, method: event.request.method, body, operationId });
       const result = url.pathname === '/api/ask' ? { answer, mode: 'model', elapsed_ms: 1, citations: [{ document_id: doc.id, id: source.chunks[0].id, ordinal: source.chunks[0].ordinal, title: doc.title, quote }] } : { answer, steps: [] };
       return cdp.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json; charset=utf-8' }], body: Buffer.from(JSON.stringify(result)).toString('base64') });
     }
@@ -544,6 +581,131 @@ async function main() {
     assert(await cdp.evaluate('document.querySelector("#valuation-text").value==='+q(previous.text)+'&&document.querySelector("#valuation-json").value==='+q(previous.json)),'Permission failure discarded valuation draft inputs');
     await screenshot('csrf-permission-error-1280');
     csrfScenario.enabled=false;
+  });
+  await check('research Enter sends once while Shift+Enter and IME preserve the draft', async () => {
+    await route('research');await select('#research-intent','ask');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');
+    const count=()=>requests.filter(item=>item.path==='/api/ask').length,before=count();
+    await fill('#question-input','Synthetic keyboard first line');await enter('#question-input',{shift:true});await cdp.send('Input.insertText',{text:'Synthetic keyboard second line'});
+    assert(await cdp.evaluate("document.querySelector('#question-input').value==='Synthetic keyboard first line\\nSynthetic keyboard second line'"),'Shift+Enter failed to insert a newline');assert(count()===before,'Shift+Enter sent a request');
+    await cdp.evaluate("(() => {const e=document.querySelector('#question-input');e.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:'研究'}));e.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter',code:'Enter',isComposing:true,keyCode:229}));e.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'研究'}));e.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter',code:'Enter',keyCode:229}));e.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter',code:'Enter',repeat:true}));})()");
+    await delay(120);assert(count()===before,'IME confirmation, key 229, or a held Enter sent a request');
+    await fill('#question-input','Synthetic keyboard single ask');await enter('#question-input');await until(()=>count()===before+1,'keyboard ask accepted');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'keyboard ask complete');await delay(120);
+    const sent=requests.filter(item=>item.path==='/api/ask').at(-1);assert(count()===before+1&&sent.body.question==='Synthetic keyboard single ask'&&sent.body.document_ids.includes(doc.id),'Enter duplicated the request or changed source scope');
+  });
+  await check('Enter uses the selected action or saved-draft purpose and home stages only once', async () => {
+    const actionBefore=requests.filter(item=>item.path==='/api/agent').length;
+    await select('#research-intent','actions');await fill('#question-input','Synthetic keyboard single action');await enter('#question-input');await until(()=>requests.filter(item=>item.path==='/api/agent').length===actionBefore+1,'keyboard action accepted');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'keyboard action complete');
+    assert(requests.filter(item=>item.path==='/api/agent').at(-1).body.message==='Synthetic keyboard single action','Enter used the wrong action draft');
+    await select('#research-intent','workflow');await select('#workflow-purpose','email');const jobsBefore=requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').length;
+    await fill('#question-input','Synthetic keyboard single saved draft');await enter('#question-input');await until(()=>requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').length===jobsBefore+1,'keyboard generation accepted');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'keyboard generation registration complete');await delay(120);
+    assert(requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').at(-1).body.workflow_key==='email','Enter used the wrong workflow purpose');
+    await route('overview');await select('#start-project',alpha.id);await select('#start-purpose','');await fill('#start-input','帮我起草一封邮件，Synthetic keyboard home staging');const plansBefore=requests.filter(item=>item.path==='/api/workflows/plan').length;
+    await enter('#start-input');await until(()=>cdp.evaluate("location.hash==='#research'&&document.querySelector('#research-intent').value==='workflow'"),'home keyboard staging');await delay(120);
+    assert(requests.filter(item=>item.path==='/api/workflows/plan').length===plansBefore+1&&requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').length===jobsBefore+1,'Home Enter duplicated planning or generated before scope confirmation');
+  });
+  await check('stopping ask and actions aborts promptly preserves drafts and ignores late responses', async () => {
+    await route('research');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');
+    for(const {intent,path,kind} of [{intent:'ask',path:'/api/ask',kind:'ask'},{intent:'actions',path:'/api/agent',kind:'agent'}]){
+      await select('#research-intent',intent);const message='Synthetic stoppable '+kind+' late reply';await fill('#question-input',message);
+      const before=requests.filter(item=>item.path===path).length,answersBefore=await cdp.evaluate("document.querySelectorAll('.answer-card').length");
+      await holdBrowserResponse(path);
+      try {
+        await enter('#question-input');await until(()=>cdp.evaluate("window.__stopReplies.length===1"),'held '+kind+' response');
+        const sent=requests.filter(item=>item.path===path).at(-1),selector='main [data-action=ai-stop][data-kind="'+kind+'"]';
+        assert(sent.operationId&&await cdp.evaluate('!!document.querySelector('+q(selector)+')&&!document.querySelector('+q(selector)+').disabled'),'Stop control or operation ID missing immediately for '+kind);
+        await click(selector);await until(()=>cdp.evaluate('!document.querySelector("#question-input").disabled&&document.querySelector("#question-input").value==='+q(message)),'stopped '+kind+' unlocks draft');
+        await until(()=>requests.some(item=>item.path==='/api/operations/'+sent.operationId+'/cancel'),'server cancellation for '+kind);
+        assert(await cdp.evaluate("window.__stopSignals.length===1&&window.__stopSignals[0]?.aborted"),'Stop did not abort '+kind+' transport');
+        await until(()=>cdp.evaluate('!document.querySelector('+q('[data-action=ai-stop][data-id="'+sent.operationId+'"]')+')'),'confirmed '+kind+' stop');
+        const stoppedAction=await cdp.evaluate("document.querySelector('.agent-answer')?.textContent||''");
+        await releaseBrowserResponses();await delay(150);
+        assert(await cdp.evaluate('document.querySelector("#question-input").value==='+q(message)+'&&!document.querySelector("#question-input").disabled'),'Late '+kind+' response cleared or relocked draft');
+        if(intent==='ask')assert(await cdp.evaluate("document.querySelectorAll('.answer-card').length")===answersBefore,'Cancelled late ask was added to answer history');
+        else assert(await cdp.evaluate("document.querySelector('.agent-answer')?.textContent||''")===stoppedAction&&!stoppedAction.includes('Bold evidence'),'Cancelled late action answer was applied');
+        assert(!await cdp.evaluate('!!document.querySelector('+q(selector)+')'),'Completed stop left active '+kind+' controls');
+        if(intent==='ask')await screenshot('ask-stopped-1280');
+        await enter('#question-input');await until(()=>requests.filter(item=>item.path===path).length===before+2,'explicit '+kind+' retry');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'retried '+kind+' response');
+        const retried=requests.filter(item=>item.path===path).at(-1);assert(retried.operationId!==sent.operationId,'Retry reused the cancelled '+kind+' operation');
+        if(intent==='actions')assert(!retried.body.history.some(item=>item.content===message),'Cancelled action entered future assistant history');
+      } finally { await releaseBrowserResponses(); }
+    }
+  });
+  await check('home Shift+Enter and stop keep the staged request without late navigation', async () => {
+    await route('overview');await select('#start-project',alpha.id);await select('#start-purpose','');await fill('#start-input','帮我起草一封邮件');const before=requests.filter(item=>item.path==='/api/workflows/plan').length;
+    await enter('#start-input',{shift:true});await cdp.send('Input.insertText',{text:'Synthetic stoppable preparation'});const message='帮我起草一封邮件\nSynthetic stoppable preparation';
+    assert(await cdp.evaluate('document.querySelector("#start-input").value==='+q(message)),'Home Shift+Enter failed to retain multiline work requirement');assert(requests.filter(item=>item.path==='/api/workflows/plan').length===before,'Home Shift+Enter submitted planning');
+    await holdBrowserResponse('/api/workflows/plan');
+    try {
+      await enter('#start-input');await until(()=>cdp.evaluate("window.__stopReplies.length===1&&!!document.querySelector('main [data-action=ai-stop][data-kind=start]')"),'home planning stop visible');await click('main [data-action=ai-stop][data-kind=start]');
+      await until(()=>cdp.evaluate("!document.querySelector('#start-input').disabled"),'home planning stopped');await releaseBrowserResponses();await delay(150);
+      assert(await cdp.evaluate('location.hash==="#overview"&&document.querySelector("#start-input").value==='+q(message)+'&&document.querySelector("#start-project").value==='+q(alpha.id)+'&&document.querySelector("#start-purpose").value===""'),'Stopped planning lost scope/request or navigated on its late response');
+      await enter('#start-input');await until(()=>cdp.evaluate("location.hash==='#research'&&!!document.querySelector('#question-input')"),'home planning explicit retry');assert(requests.filter(item=>item.path==='/api/workflows/plan').length===before+2,'Home stop triggered an implicit or duplicate retry');
+    } finally { await releaseBrowserResponses(); }
+  });
+  await check('unconfirmed stop remains visible and retry targets the original operation', async () => {
+    await route('research');await select('#research-intent','ask');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');const message='Synthetic stoppable cancellation connection failure';await fill('#question-input',message);const answersBefore=await cdp.evaluate("document.querySelectorAll('.answer-card').length");await holdBrowserResponse('/api/ask');
+    try {
+      await enter('#question-input');await until(()=>cdp.evaluate("window.__stopReplies.length===1"),'retry-stop held response');const sent=requests.filter(item=>item.path==='/api/ask').at(-1),selector='#ai-run-controls [data-action=ai-stop][data-id="'+sent.operationId+'"]';operationCancelFailures.set(sent.operationId,1);
+      await click('main [data-action=ai-stop][data-kind=ask]');await until(()=>cdp.evaluate('document.querySelector('+q(selector)+')?.textContent.includes("重试停止")&&!document.querySelector('+q(selector)+').disabled'),'failed cancellation retry control');
+      assert(await cdp.evaluate('document.querySelector("#question-input").value==='+q(message)+'&&!document.querySelector("#question-input").disabled&&document.querySelector("#ai-run-controls").textContent.includes("停止未确认")'),'Unconfirmed cancellation hid the control or lost the draft');
+      await click(selector);await until(()=>cdp.evaluate('!document.querySelector('+q(selector)+')'),'retried stop confirmed');const cancellations=requests.filter(item=>item.path==='/api/operations/'+sent.operationId+'/cancel');assert(cancellations.length===2&&cancellations.every(item=>Object.keys(item.body).length===0),'Retry changed the stopped operation or duplicated cancellation');
+      await releaseBrowserResponses();await delay(150);assert(await cdp.evaluate("document.querySelectorAll('.answer-card').length")===answersBefore&&await cdp.evaluate('document.querySelector("#question-input").value==='+q(message)),'Late response after cancellation retry was applied');
+    } finally { await releaseBrowserResponses(); }
+  });
+  await check('valuation and meeting stop preserve inputs and prevent late automatic saves', async () => {
+    auxiliaryModelMocks.set('/api/model/parse-assumptions',{assumptions:{currency:'RMB',unit:'百万元',period:'FY2026E',net_income:777,pe_multiple:11},missing:[],unmapped_fields:[]});
+    try {
+      await route('finance');await select('#valuation-method','net_income');await fill('#valuation-text','Synthetic stoppable model assumption description');const before=await cdp.evaluate("({text:document.querySelector('#valuation-text').value,json:document.querySelector('#valuation-json').value})");await holdBrowserResponse('/api/model/parse-assumptions');
+      await click('[data-action=valuation-parse]');await until(()=>cdp.evaluate("window.__stopReplies.length===1&&!!document.querySelector('main [data-action=ai-stop][data-kind=valuation]')"),'valuation stop visible');await click('main [data-action=ai-stop][data-kind=valuation]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=valuation-parse]').disabled"),'valuation stopped');await releaseBrowserResponses();await delay(150);
+      assert(await cdp.evaluate('document.querySelector("#valuation-text").value==='+q(before.text)+'&&document.querySelector("#valuation-json").value==='+q(before.json)),'Late valuation response replaced the saved input or JSON');
+      await click('[data-action=valuation-parse]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=valuation-parse]').disabled&&JSON.parse(document.querySelector('#valuation-json').value).net_income===777"),'valuation explicit retry');
+    } finally { await releaseBrowserResponses();auxiliaryModelMocks.delete('/api/model/parse-assumptions'); }
+    const meeting=(await api('state')).meetings.find(item=>item.title==='Synthetic Alpha meeting minutes');let meetingCalls=0;
+    auxiliaryModelMocks.set('/api/meeting-draft',async body=>{
+      assert(body.save_meeting_id===meeting.id,'Meeting generation did not request atomic save for its own meeting');
+      const result={summary:'Synthetic retried meeting summary',experts:[],matrix:{},contents:[],actions:[],meeting_id:meeting.id,saved:false};
+      if(++meetingCalls===1)return result;
+      await json(origin+'/api/meetings/'+meeting.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,Origin:origin},body:JSON.stringify({summary:result.summary,transcript:body.transcript})});return {...result,saved:true};
+    });
+    try {
+      await route('meetings');await select('#meeting-project',alpha.id);await click('[data-action=select-meeting][data-id="'+meeting.id+'"]');const transcript=await cdp.evaluate("document.querySelector('#meeting-transcript-input').value");await holdBrowserResponse('/api/meeting-draft');
+      await click('[data-action=meeting-ai-draft]');await until(()=>cdp.evaluate("window.__stopReplies.length===1&&!!document.querySelector('main [data-action=ai-stop][data-kind=meeting]')"),'meeting stop visible');await click('main [data-action=ai-stop][data-kind=meeting]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=meeting-ai-draft]').disabled"),'meeting stopped');await releaseBrowserResponses();await delay(150);
+      assert((await api('meetings/'+meeting.id)).summary===meeting.summary&&await cdp.evaluate('document.querySelector("#meeting-transcript-input").value==='+q(transcript)),'Cancelled meeting response saved a late summary or lost transcript');
+      await click('[data-action=meeting-ai-draft]');await until(async()=>(await api('meetings/'+meeting.id)).summary==='Synthetic retried meeting summary','meeting explicit retry saves new summary');await until(()=>cdp.evaluate("!document.querySelector('[data-action=meeting-ai-draft]').disabled"),'meeting retry finished');
+    } finally { await releaseBrowserResponses();auxiliaryModelMocks.delete('/api/meeting-draft'); }
+  });
+  await check('queued and running workflow cancellation is terminal and explicit resubmit is fresh', async () => {
+    await route('research');await select('#research-intent','workflow');await select('#workflow-purpose','email');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');
+    await until(()=>[...workflowJobs.values()].every(meta=>!['queued','running'].includes(meta.job.status)),'prior keyboard generation finished');
+    const posts=()=>requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST'),before=posts().length,savedBefore=(await api('state')).deliverables.length;
+    const message='Synthetic stoppable workflow queued cancellation';await fill('#question-input',message);await enter('#question-input');const queued=await until(()=>[...workflowJobs.values()].find(item=>item.job.message===message),'queued stoppable workflow accepted');
+    await until(()=>cdp.evaluate(`!!document.querySelector(${q('[data-action=workflow-job-stop][data-id="'+queued.job.id+'"]')})&&!document.querySelector('#question-input').disabled`),'queued workflow stop visible');assert(queued.job.status==='queued','Workflow skipped the queued cancellation stage');
+    await click('[data-action=workflow-job-stop][data-id="'+queued.job.id+'"]');await until(()=>cdp.evaluate(`document.querySelector(${q('[data-job-id="'+queued.job.id+'"]')})?.dataset.jobStatus==='cancelled'`),'queued workflow cancelled');
+    const first=posts()[before];assert(queued.job.retryable===false&&await cdp.evaluate('document.querySelector("#question-input").value==='+q(message)+'&&document.querySelector('+q('[data-source-id="'+doc.id+'"]')+').checked'),'Queued cancellation lost draft or selected scope');
+    assert(!await cdp.evaluate(`!!document.querySelector(${q('[data-action=workflow-job-retry][data-id="'+queued.job.id+'"]')})`),'Cancelled workflow still offers the failed-job retry');
+    await enter('#question-input');await until(()=>posts().length===before+2,'cancelled workflow explicit resubmit');const second=posts()[before+1];assert(second.body.request_id!==first.body.request_id,'Explicit resubmit reused cancelled request ID');
+    const running=await until(()=>[...workflowJobs.values()].find(item=>item.job.message===message&&item.job.id!==queued.job.id),'resubmitted workflow snapshot');await until(()=>cdp.evaluate(`document.querySelector(${q('[data-job-id="'+running.job.id+'"]')})?.dataset.jobStatus==='running'`),'resubmitted workflow running');
+    await fill('#question-input','Synthetic next draft kept during stop');await click('[data-action=workflow-job-stop][data-id="'+running.job.id+'"]');await until(()=>cdp.evaluate(`document.querySelector(${q('[data-job-id="'+running.job.id+'"]')})?.dataset.jobStatus==='cancelled'`),'running workflow cancelled');
+    await delay(1800);assert(posts().length===before+2&&(await api('state')).deliverables.length===savedBefore&&queued.job.status==='cancelled'&&running.job.status==='cancelled','Cancelled job auto-retried or saved a late generated draft');
+    assert(await cdp.evaluate("document.querySelector('#question-input').value==='Synthetic next draft kept during stop'&&!document.querySelector('#question-input').disabled"),'Stopping running job replaced the next composer draft');await screenshot('workflow-cancelled-1280');
+  });
+  await check('stopping pending workflow registration cancels by request ID and ignores late acknowledgement', async () => {
+    const message='Synthetic stoppable workflow pending acknowledgement';await fill('#question-input',message);const before=requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').length;
+    await holdBrowserResponse('/api/workflows/jobs');
+    try {
+      await enter('#question-input');await until(()=>cdp.evaluate("window.__stopReplies.length===1&&!!document.querySelector('main [data-action=ai-stop][data-kind=workflow-submit]')"),'pending workflow registration stop');
+      const sent=requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').at(-1),meta=[...workflowJobs.values()].find(item=>item.job.message===message);
+      await click('main [data-action=ai-stop][data-kind=workflow-submit]');await until(()=>requests.some(item=>item.path==='/api/workflows/jobs/cancel'&&item.body.request_id===sent.body.request_id),'pending workflow cancellation by request ID');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'pending workflow stopped');
+      await releaseBrowserResponses();await delay(1800);assert(meta.job.status==='cancelled'&&!meta.job.result&&requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').length===before+1,'Late registration restarted or completed a cancelled workflow');
+      assert(await cdp.evaluate('document.querySelector("#question-input").value==='+q(message)+'&&!document.querySelector("#question-input").disabled'),'Pending registration stop lost its request');
+      await enter('#question-input');await until(()=>requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').length===before+2,'pending workflow explicit retry');const retry=requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST').at(-1);assert(retry.body.request_id!==sent.body.request_id,'Pending cancellation poisoned subsequent request ID');
+      const retried=await until(()=>[...workflowJobs.values()].find(item=>item.job.message===message&&item.job.id!==meta.job.id),'pending workflow retry snapshot');await until(()=>cdp.evaluate(`!!document.querySelector(${q('[data-action=workflow-job-stop][data-id="'+retried.job.id+'"]')})`),'retried pending workflow stop');await click('[data-action=workflow-job-stop][data-id="'+retried.job.id+'"]');await until(()=>retried.job.status==='cancelled','retry cleanup cancellation');
+    } finally { await releaseBrowserResponses(); }
+  });
+  await check('Enter in an editable deliverable remains a newline instead of sending AI work', async () => {
+    await route('deliverables');const previous=await cdp.evaluate("document.querySelector('#deliverable-body').value"),before=requests.length;
+    await fill('#deliverable-body','Synthetic editable paragraph');await enter('#deliverable-body');await cdp.send('Input.insertText',{text:'Synthetic next paragraph'});assert(await cdp.evaluate("document.querySelector('#deliverable-body').value==='Synthetic editable paragraph\\nSynthetic next paragraph'"),'Document editor Enter did not insert newline');assert(requests.length===before,'Document editor Enter sent a model request');
+    await fill('#deliverable-body',previous);await click('#deliverable-form button[type=submit]');await until(()=>cdp.evaluate("document.querySelector('#deliverable-save-state').textContent.includes('已保存')"),'restored synthetic editor body');
   });
   await check('mobile 375px viewport has no document horizontal overflow', async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });

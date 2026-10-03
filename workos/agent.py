@@ -5,6 +5,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from .cancellation import check_cancelled, record_step
 
 AGENT_TOOLS = [
     {'name': 'import_text', 'description': '把一段文本保存为研究资料（source note）。参数: title, content, project_id 可选。'},
@@ -35,6 +36,7 @@ AGENT_SYSTEM = (
 
 
 def _agent_tool_result(name, args, store, project_id='', app=None, context=None):
+    check_cancelled()
     if not isinstance(args, dict):
         raise ValueError('工具参数必须是对象')
     context = context or {}
@@ -58,6 +60,7 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
     if name == 'organize_project':
         if not requested_project:
             raise ValueError('请先选择需要整理的项目')
+        check_cancelled()
         return store.organize_project(requested_project)
     if name == 'create_subtask':
         if not requested_project:
@@ -65,6 +68,7 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
         title = args.get('title')
         if not isinstance(title, str) or not title.strip() or len(title) > 100:
             raise ValueError('子任务名称需为1至100字')
+        check_cancelled()
         record = store.create('tasks', {'title': title.strip(), 'task_group': title.strip(),
             'description': args.get('description') or '', 'project_id': requested_project})
         return {'id': record['id'], 'summary': record['title'], 'task_group': record['task_group']}
@@ -76,6 +80,7 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
         supplied_ids = args.get('document_ids', selected_ids)
         if not isinstance(supplied_ids, list) or any(not isinstance(value, str) for value in supplied_ids) or set(supplied_ids) != set(selected_ids):
             raise ValueError('工作流只能使用用户明确选择的资料，不得自行选择或扩大范围')
+        check_cancelled()
         result = run_workflow(app, store, {'workflow_key': args.get('workflow_key'),
             'message': args.get('message') or context.get('message') or '',
             'project_id': requested_project, 'document_ids': selected_ids,
@@ -101,11 +106,14 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
             raise ValueError('本地摘录模式不会调用纪要模型；请明确选择 AI 模型')
         if provider == 'model':
             provider = 'deepseek'
+        check_cancelled()
         draft = app.meeting_draft({'transcript': transcript, 'provider': provider,
                                   'model_id': context.get('model_id')}, store)
+        check_cancelled()
         if not isinstance(draft.get('summary'), str) or not draft['summary'].strip():
             raise ValueError('模型未返回纪要正文，原会议未修改')
         payload = {key: draft[key] for key in ('summary', 'experts', 'matrix', 'contents') if key in draft}
+        check_cancelled()
         saved = store.update('meetings', meeting_id, payload)
         return {'id': saved['id'], 'summary': saved['title'], 'export_formats': ['docx', 'pdf']}
     if name == 'import_text':
@@ -116,6 +124,7 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
             raise ValueError('单条文本过长')
         from .engine import chunk_text
         title = str(args.get('title') or content.strip().splitlines()[0][:60] or '导入文本')[:200]
+        check_cancelled()
         record = store.create('documents', {'title': title, 'kind': 'research', 'project_id': requested_project,
                                             'source_ref': 'AI 助手导入', 'content': content, 'private': True,
                                             'hash': hashlib.sha256(content.encode()).hexdigest(), 'chunks': chunk_text(content)})
@@ -129,6 +138,7 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
                 raise ValueError('模型生成的结论不能关联个人记忆')
         if name == 'draft_deliverable':
             payload.setdefault('kind', '自定义')
+        check_cancelled()
         record = store.create({'create_project': 'projects', 'create_note': 'notes', 'create_task': 'tasks',
                                'create_meeting': 'meetings', 'draft_deliverable': 'deliverables'}[name], payload)
         return {'id': record['id'], 'summary': record.get('name') or record.get('title')}
@@ -159,6 +169,7 @@ def _agent_search(store, query, project_id=''):
 
 
 def agent_turn(self, store, body):
+    check_cancelled()
     from .server import LOCAL_AI_PRESETS, LOCAL_DEFAULT_MODEL
     if (body.get('mode') or body.get('provider')) == 'local':
         raise ValueError('本地摘录模式不会调用行动助手模型；请明确选择 AI 模型')
@@ -191,6 +202,7 @@ def agent_turn(self, store, body):
                        '\n明确选择的会议编号：' + str(context.get('meeting_id') or '')})
     steps = []
     for _ in range(6):
+        check_cancelled()
         payload = {'model': model, 'messages': transcript, 'temperature': 0.2, 'max_tokens': 1200,
                    'response_format': {'type': 'json_object'}}
         headers = {'Content-Type': 'application/json'}
@@ -199,14 +211,18 @@ def agent_turn(self, store, body):
                 headers['Authorization'] = 'Bearer ' + self.ai['api_key']
         request = urllib.request.Request(base_url.rstrip('/') + '/chat/completions',
                                          data=json.dumps(payload, ensure_ascii=False).encode(), headers=headers, method='POST')
+        check_cancelled()
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 raw = response.read(1_000_001)
         except urllib.error.HTTPError as exc:
+            check_cancelled()
             detail = exc.read(300).decode('utf-8', 'replace')
             raise ValueError('本机模型接口返回 ' + str(exc.code) + '；请确认本地模型服务在运行且模型已开通。' + detail[:160]) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            check_cancelled()
             raise ValueError('无法连接本机模型服务；请确认本地模型桥接进程在运行。') from exc
+        check_cancelled()
         try:
             content = json.loads(raw)['choices'][0]['message']['content']
             decision = json.loads(content)
@@ -216,9 +232,14 @@ def agent_turn(self, store, body):
             raise ValueError('模型返回结构不正确')
         action = decision.get('action')
         if action == 'final' or action is None:
+            check_cancelled()
             return {'answer': str(decision.get('answer') or '').strip() or '已完成。', 'steps': steps, 'model': model}
         result = _agent_tool_result(action, decision.get('args') or {}, store, project_id, self, context)
-        steps.append({'action': action, 'args': decision.get('args') or {}, 'result': result, 'say': str(decision.get('say') or '')})
+        step = {'action': action, 'args': decision.get('args') or {}, 'result': result, 'say': str(decision.get('say') or '')}
+        steps.append(step)
+        # Keep the receipt even when Stop races with a completed mutation.
+        record_step(step)
         transcript.append({'role': 'assistant', 'content': json.dumps(decision, ensure_ascii=False)})
         transcript.append({'role': 'user', 'content': '工具 ' + str(action) + ' 的结果：' + json.dumps(result, ensure_ascii=False)[:4000] + '\n请继续：要么执行下一个动作，要么用 final 汇总。'})
+    check_cancelled()
     return {'answer': '已执行多步操作，请查看下方结果确认。', 'steps': steps, 'model': model}

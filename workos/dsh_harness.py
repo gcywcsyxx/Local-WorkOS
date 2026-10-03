@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import time
+from .cancellation import check_cancelled
 
 READ_BUDGET = 200_000
 TOOL_BUDGET = 128
@@ -172,6 +173,7 @@ def run(app, prompt, model, models, *, docs=None, coverage=(), progress_callback
     packet = evidence_packet(docs, coverage) if native else {'sources':[],'read_budget':READ_BUDGET,'tool_budget':TOOL_BUDGET}
     from .workflow_runs import exclusive_model_run
     with exclusive_model_run(app.dsh_lock), tempfile.TemporaryDirectory(prefix='workos-dsh-') as temporary:
+        check_cancelled()
         root = Path(temporary)
         sessions = root/'sessions'
         sessions.mkdir()
@@ -220,6 +222,7 @@ def run(app, prompt, model, models, *, docs=None, coverage=(), progress_callback
         prompt_path.write_text(prompt,encoding='utf-8')
         try:
             with output.open('wb') as sink,error_output.open('wb') as diagnostics,prompt_path.open('rb') as task_input:
+                check_cancelled()
                 process = subprocess.Popen([app.dsh_node,str(launcher),str(app.dsh_entry),'--profile','headless','--patch',str(patch_path),'--json','-'],
                     stdin=task_input,stdout=sink,stderr=diagnostics,cwd=str(root),env=env,creationflags=flags)
                 while process.poll() is None:
