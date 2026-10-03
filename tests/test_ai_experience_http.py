@@ -29,7 +29,7 @@ class AiExperienceHttpTests(unittest.TestCase):
             'WORKOS_PUBLIC_AUTH_MODE': 'access', 'WORKOS_ACCESS_TEAM': '', 'WORKOS_ACCESS_AUD': ''}))
         mirror = Mock(); mirror.status.return_value = {'enabled': False}; mirror.sync.return_value = {'enabled': False}
         self.stack.enter_context(patch('workos.server.OneDriveMirror', return_value=mirror))
-        self.app = Application(Path(self.temp.name) / 'runtime', port=0); self.addCleanup(self.app.close)
+        self.app = Application(Path(self.temp.name).resolve() / 'runtime', port=0); self.addCleanup(self.app.close)
         self.app.local_chat = Mock(side_effect=AssertionError('Unexpected synthetic provider call'))
         self.app.dsh_answer = Mock(side_effect=AssertionError('Unexpected synthetic DSH call'))
         self.app.dsh_available = True
@@ -40,7 +40,7 @@ class AiExperienceHttpTests(unittest.TestCase):
             'content': 'Synthetic company evidence and revenue from explicitly supplied source A.'})
         self.doc2 = self.store.create('documents', {'title': 'Synthetic source B', 'project_id': self.project['id'],
             'content': 'Different synthetic source evidence.'})
-        root = Path(self.temp.name) / 'synthetic-projects'; root.mkdir()
+        root = Path(self.temp.name).resolve() / 'synthetic-projects'; root.mkdir()
         self.project_folder = root / self.project['name']; self.project_folder.mkdir()
         self.app.artifacts.configure([root])
         self.httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler); self.httpd.daemon_threads = True

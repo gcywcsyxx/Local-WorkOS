@@ -11,6 +11,7 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 - Chrome uses a fresh synthetic profile/database and mocked providers for stable progress regions, multi-round ask/new chat/scope changes, explicit history recovery, recovered active operations without resend or draft loss, saved edits before new workflow revisions, edited valuation assumptions, meeting instructions/transcript fidelity, archive retry/download/binding and mobile layout.
 - Times are estimates by task type; stage logs and context routing do not certify factual answer quality. Suite totals and the release revision are recorded by each SOP execution.
 - A genuine DeepSeek compatible-bridge canary used only temporary synthetic records: two ask rounds retained a work reference; two workflow rounds retained current manual edits, revenue numbers and actual/forecast distinctions, created revision2 without changing the parent, and generated readable HTML/DOCX/PPTX/Markdown versions. This checks this bounded case, not overall factual accuracy or bridge model identity independently.
+- Windows CI can name the same temporary directory with either an8.3 alias or its canonical long name. Artifact fixtures normalize the expected temporary path before comparing it with the confined canonical archive path; file integrity, content, scope and confinement assertions remain enforced.
 
 ### 1.6.1 selected-model ask on lexical misses, 2026-10-04
 

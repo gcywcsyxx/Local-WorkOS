@@ -18,7 +18,7 @@ from workos.project_artifacts import ProjectArtifacts, OUTPUT_FOLDER, _linked
 class ProjectArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.root = self.base / 'business'
         self.root.mkdir()
         self.service = ProjectArtifacts(self.base / 'runtime')
