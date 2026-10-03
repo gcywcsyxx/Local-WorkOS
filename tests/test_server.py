@@ -428,9 +428,11 @@ class ServerTests(unittest.TestCase):
 
     def test_public_origin_requires_access_authentication_and_same_origin(self):
         self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com'})[0],403)
+        self.assertEqual(self.request('GET','/api/state',headers={'Cf-Connecting-IP':'198.51.100.1'})[0],403)
         self.app.public_origin='https://workos.example.com'
         try:
             self.assertEqual(self.request('GET','/api/bootstrap',headers={'Host':'workos.example.com'})[0],403)
+            self.assertEqual(self.request('GET','/api/state',headers={'Cf-Connecting-IP':'198.51.100.1'})[0],403)
             self.assertEqual(self.request('GET','/api/state',headers={'Host':'workos.example.com','Cf-Access-Authenticated-User-Email':'forged@example.invalid'})[0],403)
             with patch.object(self.app.access_validator,'verify',return_value={'sub':'synthetic'}) as verify:
                 self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com','Cf-Access-Jwt-Assertion':'synthetic-valid'})[0],200)

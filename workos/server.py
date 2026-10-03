@@ -369,7 +369,9 @@ class Handler(BaseHTTPRequestHandler):
   allowed_origins={'http://'+h for h in local_hosts}
   if public:allowed_origins.add(public)
   if origin and origin not in allowed_origins:raise PermissionError('不允许跨站请求')
-  if host not in local_hosts:self.app.access_validator.verify(self.headers.get('Cf-Access-Jwt-Assertion',''))
+  proxied=bool(self.headers.get('Cf-Connecting-IP') or self.headers.get('Cf-Ray'))
+  if proxied and not public:raise PermissionError('公网入口尚未启用')
+  if host not in local_hosts or proxied:self.app.access_validator.verify(self.headers.get('Cf-Access-Jwt-Assertion',''))
   if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),self.app.csrf):raise PermissionError('会话校验失败，请刷新页面')
  def workspace(self):
   mode=self.headers.get('X-Workspace','personal')

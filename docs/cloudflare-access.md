@@ -16,7 +16,7 @@ The application listens on 127.0.0.1. Public access is optional and fail-closed;
 Browser login alone does not give this agent an API token or browser automation session. The tunnel origin certificate is not proof of Access policy administration rights. Do not extract browser cookies or place API tokens/passwords in source code, commands, repository remotes or documentation.
 
 ## Origin enforcement
-Cloudflare forwards the `Cf-Access-Jwt-Assertion` header after authenticating the user. The application checks RS256 signature against the specific team certs, issuer, application audience, expiry, issued-at and subject. It does not trust the email header alone. Public origins must be HTTPS and must pass existing CSRF checks for writes. Public signing keys are cached for at most five minutes. Tokens, email claims and raw key errors are never logged or returned.
+Cloudflare forwards the `Cf-Access-Jwt-Assertion` header after authenticating the user. The application checks RS256 signature against the specific team certs, issuer, application audience, expiry, issued-at and subject. It does not trust the email header alone. Public origins must be HTTPS and must pass existing CSRF checks for writes. Requests carrying Cloudflare forwarding markers are also treated as public traffic, even if a tunnel rewrites Host to localhost; these cannot bypass authentication or enable a disabled public origin. Public signing keys are cached for at most five minutes. Tokens, email claims and raw key errors are never logged or returned.
 
 ## Verify before enabling external use
 - Request `/api/bootstrap` and `/api/state` from outside without login: no workspace data may be returned.
