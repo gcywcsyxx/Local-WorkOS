@@ -131,7 +131,14 @@ class Application:
   if len(summary)>2_000_000:raise ValueError('纪要超过文档大小限制')
   actions=result.get('actions') if isinstance(result.get('actions'),list) else []
   experts=result.get('experts') if isinstance(result.get('experts'),list) else []
-  experts=[item for item in experts[:40] if isinstance(item,dict)]
+  clean_experts=[]
+  for item in experts[:40]:
+   if not isinstance(item,dict):continue
+   clean_experts.append({'institution':str(item.get('institution') or '')[:200],'title':str(item.get('title') or '')[:200],
+                         'date':str(item.get('date') or '')[:40],'background':str(item.get('background') or '')[:8000],
+                         'comments':[str(x)[:2000] for x in item.get('comments',[])][:20] if isinstance(item.get('comments'),list) else [],
+                         'content':str(item.get('content') or '')[:200000]})
+  experts=clean_experts
   matrix=result.get('matrix') if isinstance(result.get('matrix'),dict) else {'topics':[],'experts':[],'cells':[]}
   topics=matrix.get('topics') if isinstance(matrix.get('topics'),list) else []
   columns=matrix.get('experts') if isinstance(matrix.get('experts'),list) else []

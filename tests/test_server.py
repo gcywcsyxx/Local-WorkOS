@@ -307,6 +307,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result['matrix']['topics'],['采购份额'])
         self.assertEqual(result['matrix']['cells'][0][0],'原文短句')
         self.assertEqual(result['experts'][0]['institution'],'合成机构')
+        with patch.object(self.app,'local_chat',return_value=(json.dumps({'title':'x','summary':'正文','experts':[None,{'institution':123,'comments':'bad','content':None},{'institution':'ok'}],'matrix':{'topics':'bad','experts':None,'cells':[]},'contents':'bad'},ensure_ascii=False),'deepseek-v4.1-flash')):
+            status,messy=self.request('POST','/api/meeting-draft',{'provider':'deepseek','transcript':'t'})
+        self.assertEqual(status,200,messy)
+        self.assertEqual(len(messy['experts']),2)
+        self.assertEqual(messy['experts'][0]['comments'],[])
+        self.assertEqual(messy['experts'][1]['institution'],'ok')
+        self.assertEqual(messy['matrix'],{'topics':[],'experts':[],'cells':[]})
+        self.assertEqual(messy['contents'],[])
 
     def test_sync_status_and_manual_sync_are_safe_when_not_configured(self):
         status, data = self.request('GET', '/api/sync/status')
