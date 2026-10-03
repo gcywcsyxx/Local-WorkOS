@@ -426,17 +426,19 @@ class ServerTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(self.request('POST', '/api/ai/settings', {field: 123})[0], 400)
 
-    def test_host_guard_allows_only_localhost_unless_public_origin_configured(self):
-        status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com'})
-        self.assertEqual(status,403)
+    def test_public_origin_requires_access_authentication_and_same_origin(self):
+        self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com'})[0],403)
         self.app.public_origin='https://workos.example.com'
         try:
-            status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com'})
-            self.assertEqual(status,200)
-            status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'https://evil.invalid'})
-            self.assertEqual(status,403)
-            status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'https://workos.example.com'})
-            self.assertEqual(status,200)
+            self.assertEqual(self.request('GET','/api/bootstrap',headers={'Host':'workos.example.com'})[0],403)
+            self.assertEqual(self.request('GET','/api/state',headers={'Host':'workos.example.com','Cf-Access-Authenticated-User-Email':'forged@example.invalid'})[0],403)
+            with patch.object(self.app.access_validator,'verify',return_value={'sub':'synthetic'}) as verify:
+                self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com','Cf-Access-Jwt-Assertion':'synthetic-valid'})[0],200)
+                verify.assert_called_once_with('synthetic-valid')
+                self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'https://evil.invalid'})[0],403)
+                self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'http://workos.example.com'})[0],403)
+                self.assertEqual(self.request('POST','/api/projects',{'name':'Synthetic'},headers={'Host':'workos.example.com','Origin':'https://workos.example.com'},csrf=False)[0],403)
+                self.assertEqual(self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'https://workos.example.com'})[0],200)
         finally:
             self.app.public_origin=''
 
