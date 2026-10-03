@@ -291,6 +291,62 @@ class WorkflowJobTests(unittest.TestCase):
             for encoded in row:
                 self.assertNotIn('DO_NOT_PERSIST_API_KEY', encoded)
 
+    def test_public_requests_reject_credentials_and_internal_override_fields_before_persistence(self):
+        with patch('workos.jobs.ThreadPoolExecutor', PendingExecutor):
+            jobs = self.manager()
+        for field, value in (('api_key', 'API_KEY_REQUEST_SENTINEL'),
+                             ('_provider_identity', 'a' * 64)):
+            with self.subTest(field=field), self.assertRaises(ValueError) as rejected:
+                jobs.submit('real', {**self.request(), field: value})
+            self.assertNotIn(value, str(rejected.exception))
+        self.assertEqual(jobs.db.execute('SELECT count(*) FROM jobs').fetchone()[0], 0)
+        self.assertEqual(jobs.list('real'), [])
+        self.app.local_chat.assert_not_called()
+
+    def test_shutdown_interruption_blocks_old_worker_save_and_checkpoint_after_new_retry(self):
+        old = self.manager(workers=1)
+        entered, release = threading.Event(), threading.Event()
+        self.releases.append(release)
+
+        def late_old_model(*args, **kwargs):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError('Synthetic shutdown test timed out')
+            return 'OLD LATE DRAFT [S1]', 'Synthetic old model'
+
+        self.app.local_chat.side_effect = late_old_model
+        job = old.submit('real', self.request())
+        self.assertTrue(entered.wait(1))
+        old.begin_shutdown()
+        interrupted = old.get('real', job['id'])
+        self.assertEqual(interrupted['status'], 'interrupted')
+        self.assertTrue(interrupted['retryable'])
+        self.assertEqual(self.stores['real'].list('deliverables'), [])
+        with self.assertRaises(ValueError):
+            old.submit('real', self.request(request_id='after-shutdown'))
+        # Another manager represents a newly started process while the old
+        # provider call still awaits a response and old SQLite remains open.
+        restarted = self.manager(workers=1)
+        self.app.local_chat.side_effect = None
+        self.app.local_chat.return_value = ('NEW RETRY DRAFT [S1]', 'Synthetic new model')
+        restarted.retry('real', job['id'])
+        before_old_returns = self.finished(restarted, 'real', job['id'])
+        self.assertEqual(before_old_returns['status'], 'completed')
+        self.assertIn('NEW RETRY DRAFT', before_old_returns['result']['body'])
+        revision = before_old_returns['revision']
+        saved_id = before_old_returns['result']['deliverable_id']
+        release.set()
+        old.close()  # Joins the released old worker before asserting durable state.
+        after_old_returns = restarted.get('real', job['id'])
+        self.assertEqual(after_old_returns['revision'], revision)
+        self.assertEqual(after_old_returns['status'], 'completed')
+        self.assertEqual(after_old_returns['result']['deliverable_id'], saved_id)
+        saved = self.stores['real'].list('deliverables')
+        self.assertEqual(len(saved), 1)
+        self.assertIn('NEW RETRY DRAFT', saved[0]['body'])
+        self.assertNotIn('OLD LATE DRAFT', str(saved))
+        self.assertEqual(self.app.sync_workspace.call_count, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

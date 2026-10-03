@@ -1,6 +1,6 @@
 # WorkOS quality harness
 
-Version 1.5.0, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
+Version 1.5.1, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
 
 ## Execution
 
@@ -21,5 +21,7 @@ Actual read intervals are merged per source, and repeated delivery counts agains
 `POST /api/workflows/jobs` accepts immutable requirements, selection, quality mode and a stable request ID. Acceptance returns quickly; GET lists/scoped snapshots support polling, navigation, reconnect and reload. Inputs are capped at12MB and at most80 documents; two workers handle at most eight active jobs. A provider-identity hash excludes API keys and is checked before every model call; credential rotation is allowed without persisting the key. Source/context edits block stale saving.
 
 The local private job DB persists snapshots/checkpoints separately from personal/demo records. Startup recovers an already saved generation ID or marks unfinished work interrupted; retry requires an explicit action and revalidates captured inputs. This prevents a save/checkpoint crash from duplicating drafts. Release backups include the job DB. Record mirroring includes saved draft/reports but not unfinished jobs; restoring a record mirror alone does not resume jobs.
+
+Shutdown marks unfinished jobs interrupted before closing the listener; late provider responses cannot save or change checkpoints. A blocked HTTP call may take its bounded timeout to return, but that old worker loses write authority immediately. Unknown submit fields are rejected, including credentials and caller-injected private guard metadata.
 
 Native Excel calculations remain Python/formula-based and require their dedicated numerical validation. Meeting-transcript helper generation and simple research Q&A retain their existing bounded adapters; they do not implicitly perform the material workflow's independent critic cycle. Word/PPT exports are editable presentations of the draft, not a separate factual-validation stage. No automatic mail sending, arbitrary workbook editing, model-weight training or broad quality benchmark is claimed.

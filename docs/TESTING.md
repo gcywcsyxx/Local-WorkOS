@@ -6,6 +6,7 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ### 1.5.0 harness revision, 2026-10-04
 
+- 1.5.1 adds controlled shutdown/restart regressions with a blocked model: an old late response cannot save or overwrite a fresh process's retry/completed checkpoint. Extra submit fields cannot persist credentials.
 - Synthetic quality fixtures cover all13 recipes, unambiguous constraints, table parsing, source labels, completion cutoffs and false full-read/DD/model-recalculation claims. Clean review does not set facts_verified. Integration verifies independent critic JSON, blocking repair/re-review, one-repair limit, visible warnings and stale checks after editing.
 - Durable-job tests cover concurrent duplicate requests, workspace isolation, immutable evidence, memory conversion, project-context edits, bounded queue, restart interruption/retry, saved-generation checkpoint recovery, provider identity changes before/between calls and credential rotation without durable secret storage.
 - Updated isolated Chrome groups cover quick acceptance, unlocked composer/navigation, actual stage snapshots, reload, disconnect/backoff, failed/interrupted retry, stable expanded quality cards, findings, stale edits and desktop/mobile overflow. Browser model responses are synthetic; no production records are modified.

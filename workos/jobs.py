@@ -19,6 +19,8 @@ from .workflows import RECIPES, _selected_documents, _project_context, provider_
 STAGES = [('prepare', '准备资料'), ('generate', '生成正文'), ('check', '检查要求'),
           ('review', '复核内容'), ('repair', '修订问题'), ('save', '保存草稿')]
 ACTIVE = ('queued', 'running')
+PUBLIC_FIELDS = {'workflow_key', 'key', 'message', 'question', 'project_id', 'document_ids',
+                 'mode', 'provider', 'model_id', 'quality_mode', 'request_id', 'sender_name'}
 
 
 def _encoded(value):
@@ -33,8 +35,9 @@ def _identity(doc):
 
 
 class FrozenStore:
-    def __init__(self, real, snapshot, generation_id):
+    def __init__(self, real, snapshot, generation_id, active_check=None):
         self.real, self.snapshot, self.generation_id = real, snapshot, generation_id
+        self.active_check = active_check
 
     def get(self, collection, item_id):
         for item in self.snapshot.get(collection, []):
@@ -46,6 +49,8 @@ class FrozenStore:
         return copy.deepcopy(self.snapshot.get(collection, []))
 
     def validate_current(self):
+        if self.active_check and not self.active_check():
+            raise ValueError('服务重启中断了任务；未保存后台结果')
         if self.snapshot.get('projects'):
             self.real.get('projects', self.snapshot['projects'][0]['id'])
         for original in self.snapshot.get('documents', []):
@@ -188,6 +193,7 @@ class WorkflowJobs:
     def submit(self, workspace, body):
         if workspace not in self.app.stores: raise ValueError('工作区选择不正确')
         if not isinstance(body, dict): raise ValueError('工作流要求必须是对象')
+        if set(body) - PUBLIC_FIELDS: raise ValueError('后台任务包含不支持的字段；凭证不能写入任务')
         request_id = body.get('request_id')
         if not isinstance(request_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', request_id):
             raise ValueError('后台任务需要有效的请求编号')
@@ -237,6 +243,7 @@ class WorkflowJobs:
 
     def _progress(self, workspace, job_id, stage, detail='', status='running'):
         with self.lock:
+            if self.closed: raise ValueError('服务重启中断了任务；未保存后台结果')
             state = self._row(workspace, job_id)[2]
             if state['status'] not in ACTIVE: return
             for item in state['stages']:
@@ -250,16 +257,18 @@ class WorkflowJobs:
     def _execute(self, workspace, job_id):
         from .workflows import run_workflow
         with self.lock:
+            if self.closed: return
             payload, snapshot, state = self._row(workspace, job_id)
             payload['_provider_identity'] = snapshot.get('provider_identity')
         try:
-            frozen = FrozenStore(self.app.stores[workspace], snapshot, job_id)
+            frozen = FrozenStore(self.app.stores[workspace], snapshot, job_id, active_check=lambda: not self.closed)
             frozen.validate_current()
             if snapshot.get('provider_identity') != provider_identity(self.app, payload):
                 raise ValueError('模型服务配置已变更，请重新创建任务；没有自动切换模型')
             result = run_workflow(self.app, frozen, payload,
                 progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
             with self.lock:
+                if self.closed: return
                 state = self._row(workspace, job_id)[2]
                 state.update(status='completed', stage='save', result=result, retryable=False, error='')
                 for item in state['stages']:
@@ -270,6 +279,7 @@ class WorkflowJobs:
         except Exception as exc:
             logging.warning('Background workflow failed (%s)', type(exc).__name__)
             with self.lock:
+                if self.closed: return
                 state = self._row(workspace, job_id)[2]
                 saved = self._saved(workspace, job_id)
                 if saved:
@@ -287,7 +297,23 @@ class WorkflowJobs:
                         if item['status'] == 'running': item['status'] = 'failed'
                 self._write(job_id, state)
 
+    def begin_shutdown(self):
+        with self.lock:
+            if self.closed: return
+            self.closed = True
+            for job_id, workspace, raw in self.db.execute('SELECT id,workspace,state FROM jobs').fetchall():
+                state = json.loads(raw)
+                if state['status'] not in ACTIVE: continue
+                saved = self._saved(workspace, job_id)
+                if saved:
+                    state.update(status='completed', result=self._recover(saved, state), retryable=False, error='')
+                else:
+                    state.update(status='interrupted', retryable=True, error='服务重启中断了任务；可按原任务重试')
+                    for item in state['stages']:
+                        if item['status'] == 'running': item['status'] = 'interrupted'
+                self._write(job_id, state)
+
     def close(self):
-        with self.lock: self.closed = True
+        self.begin_shutdown()
         self.executor.shutdown(wait=True)
         with self.lock: self.db.close()

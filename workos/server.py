@@ -109,15 +109,23 @@ class Application:
   self.workflow_runs=WorkflowRuns()
   self._jobs=None
   self.jobs_lock=threading.Lock()
+  self.stopping=False
   self.completion_meta=threading.local()
 
  def jobs(self):
   from .jobs import WorkflowJobs
   with self.jobs_lock:
+   if self.stopping:raise ValueError('服务正在重启，请稍后重试')
    if self._jobs is None:self._jobs=WorkflowJobs(self,self.data_dir/'workflow-jobs.sqlite3')
    return self._jobs
 
+ def begin_shutdown(self):
+  with self.jobs_lock:
+   self.stopping=True
+   if self._jobs is not None:self._jobs.begin_shutdown()
+
  def close(self):
+  self.begin_shutdown()
   if self._jobs is not None:self._jobs.close()
   for store in self.stores.values():store.close()
 
@@ -685,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
      return self.respond(result)
     if path=='/api/sync':return self.respond(self.app.sync_workspace(mode))
     if path=='/api/shutdown':
-     self.respond({'stopping':True});threading.Thread(target=self.server.shutdown,daemon=True).start();return
+     self.app.begin_shutdown();self.respond({'stopping':True});threading.Thread(target=self.server.shutdown,daemon=True).start();return
     match=re.fullmatch(r'/api/(projects|tasks|documents|meetings|notes|deliverables)',path)
     if match:
      col=match[1]
@@ -732,6 +740,7 @@ def main():
  try:server.serve_forever()
  except KeyboardInterrupt:pass
  finally:
+  app.begin_shutdown()
   server.server_close()
   app.close()
  return 0
