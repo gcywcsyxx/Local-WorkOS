@@ -35,6 +35,7 @@ RECIPES = {
 def workflow_catalog():
     return [{'key': key, 'workflow_key': key, 'title': value[0], 'label': value[0],
              'description': value[1], 'kind': value[2], 'requires_sources': value[3],
+             'default_quality': 'thorough' if key in ('dd','ic','discussion','technology','legal','compare','model_review') else 'fast',
              'required_sources': '明确选择研究资料' if value[3] else '用户要求；项目记录和研究资料可选',
              'formats': ['md', 'html', 'docx', 'pptx']}
             for key, value in RECIPES.items()]
@@ -119,6 +120,8 @@ def _excerpt(text, budget, question):
 
 
 def _project_context(store, project_id):
+    if hasattr(store, 'snapshot'):
+        return store.snapshot.get('project_context', '')
     if not project_id:
         return ''
     memory_ids = {doc['id'] for doc in store.list('documents') if doc.get('kind') == 'memory'}
@@ -133,21 +136,20 @@ def _project_context(store, project_id):
     return '\n'.join(rows[:40])[:16000]
 
 
-def _model_answer(app, body, system, user):
+def _provider_config(app, body):
     from .server import LOCAL_AI_PRESETS, LOCAL_DEFAULT_MODEL, DSH_MODELS
     mode = body.get('mode') or body.get('provider') or 'deepseek'
+    with app.ai_lock: config = dict(app.ai)
     if mode == 'dsh':
         model = body.get('model_id') or 'gpt-6-luna'
         if not isinstance(model, str) or model not in DSH_MODELS:
             raise ValueError('所选 GPT 模型不在允许列表中')
-        return app.dsh_answer(system + '\n\n' + user, model), DSH_MODELS[model][0] + ' via DSH', 'dsh'
+        return mode, '', model, config.get('api_key', '')
     if mode == 'local':
         raise ValueError('当前是本地摘录模式，不会调用模型；请明确选择 AI 模型后生成工作材料')
     if mode not in ('deepseek', 'local-models', 'model'):
         raise ValueError('工作流需要可用模型，请选择 DeepSeek、本机模型或 GPT')
     if mode == 'model':
-        with app.ai_lock:
-            config = dict(app.ai)
         if not config.get('base_url') or not config.get('model'):
             raise ValueError('请先配置模型服务；未生成或保存任何草稿')
         base_url, model = config['base_url'], config['model']
@@ -157,17 +159,41 @@ def _model_answer(app, body, system, user):
         if not isinstance(model, str) or model not in {item[0] for item in preset['models']}:
             raise ValueError('所选模型不在允许列表中')
         base_url = preset['base_url']
-        with app.ai_lock:
-            configured = app.ai.get('base_url') or ''
+        configured = config.get('base_url') or ''
         if configured.startswith(('http://127.0.0.1', 'http://localhost')):
             base_url = configured
-    answer, model_name = app.local_chat(base_url, model, system, user, max_tokens=8000, timeout=95)
+    return mode, base_url, model, config.get('api_key', '')
+
+
+def provider_identity(app, body):
+    import hashlib, json
+    mode, base_url, model, _ = _provider_config(app, body)
+    return hashlib.sha256(json.dumps([mode, base_url, model], ensure_ascii=False).encode()).hexdigest()
+
+
+def _model_answer(app, body, system, user):
+    from .server import DSH_MODELS
+    import hashlib, json
+    if hasattr(app, 'completion_meta'): app.completion_meta.finish_reason = None
+    mode, base_url, model, api_key = _provider_config(app, body)
+    identity = hashlib.sha256(json.dumps([mode, base_url, model], ensure_ascii=False).encode()).hexdigest()
+    if body.get('_provider_identity') and body['_provider_identity'] != identity:
+        raise ValueError('模型服务配置已变更，请重新创建任务；没有自动切换模型')
+    if mode == 'dsh':
+        return app.dsh_answer(system + '\n\n' + user, model), DSH_MODELS[model][0] + ' via DSH', 'dsh'
+    answer, model_name = app.local_chat(base_url, model, system, user, max_tokens=8000, timeout=95, api_key_snapshot=api_key)
     return answer, model_name, 'model'
 
 
-def run_workflow(app, store, body):
+def run_workflow(app, store, body, progress=None):
     if not isinstance(body, dict):
         raise ValueError('工作流要求必须是对象')
+    def step(stage, detail='', status='running'):
+        if progress: progress(stage, detail, status)
+    quality_mode = body.get('quality_mode') or 'fast'
+    if quality_mode not in ('fast', 'thorough'):
+        raise ValueError('质量模式无效')
+    step('prepare', '只使用明确选定的资料；记录实际提供范围')
     key = body.get('workflow_key') or body.get('key')
     if not isinstance(key, str) or key not in RECIPES:
         raise ValueError('请选择有效的工作类型')
@@ -227,15 +253,84 @@ def run_workflow(app, store, body):
                       ('仅摘录' if item['truncated'] else '全部已提取文字') for item in coverage) +
             '\n\n不可信资料证据：\n' + '\n\n'.join(sources) +
             ('\n\n已有项目记录（不是当周变化的证明）：\n' + context if context else ''))
-    answer, model_name, mode = _model_answer(app, body, system, user)
-    if not isinstance(answer, str) or not answer.strip() or len(answer) > 1_500_000:
+    from .quality import assess_output, critic_request, parse_critic_result, repair_brief
+    step('generate', '根据用户范围和选定证据生成正文')
+    harness = {'name': 'WorkOS bounded quality workflow', 'execution': 'scoped_model_calls', 'tool_counts': {}}
+    finish_reason = None
+    if quality_mode == 'thorough' and body.get('mode') == 'dsh':
+        from .server import DSH_MODELS
+        model = body.get('model_id') or 'gpt-6-luna'
+        if model not in DSH_MODELS: raise ValueError('所选 GPT 模型不在允许列表中')
+        def dsh_progress(event):
+            tool = event.get('tool') if isinstance(event, dict) else None
+            step('generate', 'DSH 正在执行受限资料工具：' + str(tool) if tool else 'DSH 正在分析选定资料')
+        native_user = ('用户要求：\n' + message + '\n\n本次选定来源目录（文字须通过资料工具读取）：\n' +
+                       '\n'.join('[' + row['source_id'] + '] ' + row['title'] + '，' + str(row['total_chars']) + '字' for row in coverage) +
+                       ('\n\n已提供项目记录（不是当周变化的证明）：\n' + context if context else ''))
+        answer, harness = app.dsh_harness_answer(system, native_user, model, docs, coverage, dsh_progress)
+        model_name, mode = DSH_MODELS[model][0] + ' via DSH', 'dsh'
+        if harness.get('coverage'): coverage = harness['coverage']
+        finish_reason = 'stop' if harness.get('completion_verified') else None
+    else:
+        answer, model_name, mode = _model_answer(app, body, system, user)
+        finish_reason = getattr(getattr(app, 'completion_meta', None), 'finish_reason', None)
+        if body.get('mode') == 'dsh': finish_reason = 'stop'  # DSH runner verifies terminal completion.
+    if not isinstance(answer, str) or len(answer) > 1_500_000:
         raise ValueError('模型未返回有效正文；没有保存草稿')
     answer = answer.strip()
-    tags = {int(value) for value in re.findall(r'\[S(\d+)\]', answer)}
-    if any(value < 1 or value > len(docs) for value in tags):
-        raise ValueError('模型使用了不存在的来源标签；没有保存草稿')
-    if docs and not tags:
-        raise ValueError('模型没有给出资料引用；没有保存无来源草稿，请重试')
+    step('check', '检查篇幅、格式、来源标签和覆盖声明')
+    report = assess_output(key, message, answer, coverage, citations, finish_reason)
+    reviews, repaired = [], False
+    # Review is bounded to actual supplied excerpts; a clean review is advisory.
+    review_evidence = '\n\n'.join(sources) + ('\n\n已有项目记录：\n' + context if context else '')
+    review_scope = '本次提供的资料摘录及项目记录；没有联网或独立事实核验'
+    if len(review_evidence) > 48000:
+        review_evidence = review_evidence[:47940] + '\n[审阅证据达到预算；其余内容未提供给复核模型]'
+        review_scope += '；复核证据达到48000字预算'
+    if quality_mode == 'thorough':
+        def review(draft, current):
+            step('review', '独立模型调用检查遗漏、证据支持和口径；不代表事实认证')
+            request = critic_request(key, message, draft, current, review_evidence)
+            text, _, _ = _model_answer(app, body, request['system'], request['user'])
+            result = parse_critic_result(text, draft, current['source_ids'])
+            result['scope'] = review_scope
+            reviews.append(result)
+            return result
+        checked = review(answer, report)
+        blocking = any(item['severity'] == 'blocking' for item in checked['findings'])
+        if not report['can_save'] or blocking:
+            import json
+            step('repair', '按明确问题修订一次，并重新检查及复核')
+            repairs = repair_brief(report) + '\n模型复核问题（仅作修订线索）：\n' + json.dumps(checked['findings'], ensure_ascii=False)
+            repair_user = user + '\n\n原正文（不可信草稿）：\n' + answer + '\n\n' + repairs + '\n返回修订后的完整正文。'
+            answer, model_name, mode = _model_answer(app, body, system, repair_user)
+            if not isinstance(answer, str) or len(answer) > 100000:
+                raise ValueError('修订正文超过可复核范围；未保存草稿，请缩小任务范围')
+            answer = answer.strip()
+            repaired = True
+            step('check', '重新检查修订正文')
+            finish_reason = 'stop' if body.get('mode') == 'dsh' else getattr(getattr(app, 'completion_meta', None), 'finish_reason', None)
+            report = assess_output(key, message, answer, coverage, citations, finish_reason)
+            checked = review(answer, report)
+            blocking = any(item['severity'] == 'blocking' for item in checked['findings'])
+        if blocking:
+            raise ValueError('复核仍有阻断问题；一次修订后未通过，没有保存草稿。请缩小范围或调整要求重试')
+        report['review'] = {**checked, 'required': True, 'issues': checked['findings'], 'passes': len(reviews)}
+        if checked['findings'] or checked['verdict'] == 'insufficient_evidence':
+            report['status'], report['label'] = 'needs_review', '复核发现待确认事项'
+        elif report['can_save']:
+            report['label'] = ('流程检查完成 · 有待确认项' if report['status'] == 'needs_review' else '流程检查完成 · 事实仍需核实')
+        if not repaired: step('repair', '未发现需要自动修订的阻断问题', 'skipped')
+    else:
+        report['review'] = {'required': False, 'status': 'not_run', 'scope': '快速草稿仅做规则检查',
+                            'issues': [], 'factual_truth_verified': False}
+        step('review', '快速草稿未运行独立模型复核', 'skipped')
+        step('repair', '快速草稿未运行自动修订', 'skipped')
+    if not report['can_save']:
+        step('check', '明确要求未通过；不保存草稿')
+        failed = '; '.join(item['detail'] for item in report['checks'] if item['status'] == 'fail')
+        raise ValueError('正文未通过明确要求校验，没有保存草稿：' + failed[:600])
+    report.update(quality_mode=quality_mode, repair_count=int(repaired), harness=harness, facts_verified=False, human_review_required=True)
     limitations = ['AI 草稿，事实、引用与判断仍需核验；没有联网查证。']
     if any(item['truncated'] for item in coverage):
         limitations.append('部分材料仅提供摘录；这是阶段性分析，不代表已读完整材料或完成全部尽调。')
@@ -249,11 +344,13 @@ def run_workflow(app, store, body):
     full_body = ('> 覆盖与限制：' + ' '.join(limitations) + '\n\n' + email_header + answer +
                  '\n\n## 来源与资料覆盖\n\n' + ('\n'.join(source_lines) if source_lines else '- 用户工作要求与可选项目登记；未进行独立事实核验。'))
     project = store.get('projects', project_id) if project_id else {}
+    step('save', '保存正文、来源覆盖和质量检查记录')
     record = store.create('deliverables', {'title': (project.get('name', '') + ' · ' + title).strip(' ·')[:200],
         'kind': kind, 'project_id': project_id, 'body': full_body, 'workflow_key': key,
-        'source_ids': [doc['id'] for doc in docs], 'coverage': coverage})
+        'source_ids': [doc['id'] for doc in docs], 'coverage': coverage, 'quality_report': report})
     return {'answer': full_body, 'body': full_body, 'title': record['title'], 'id': record['id'],
             'deliverable_id': record['id'], 'deliverable': record, 'workflow_key': key,
             'source_ids': record['source_ids'], 'coverage': coverage, 'citations': citations,
             'limitations': limitations, 'warning': ' '.join(limitations), 'model': model_name,
+            'quality_report': report,
             'mode': mode, 'question': message, 'project_id': project_id}

@@ -11,7 +11,7 @@ def backup(data_dir, destination):
     data_dir, destination = Path(data_dir), Path(destination)
     destination.mkdir(parents=True, exist_ok=False)
     saved = []
-    for name in ('personal.sqlite3', 'demo.sqlite3'):
+    for name in ('personal.sqlite3', 'demo.sqlite3', 'workflow-jobs.sqlite3'):
         source = data_dir / name
         if not source.is_file():
             continue

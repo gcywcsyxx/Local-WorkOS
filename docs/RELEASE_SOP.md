@@ -13,4 +13,4 @@
 
 每次安装使用应用版本下的新build目录，避免已删除旧代码留在覆盖安装中。运行实例 `/api/health` 的 version/source_revision 必须与提交一致；仅复制 OneDrive 源码或 push GitHub 不算服务已发布。生产探测仅检查读取、本地健康、公开登录页和匿名 API 拒绝；真实密码与 cookies 不读取、不打印。登录、记住会话、注销和 CSRF 用临时账号做回归。
 
-数据库备份位于应用本机数据目录的 release-backups；原件与认证配置留在原位置。OneDrive 镜像可恢复记录及已归档原件，但本机 last_sync 不证明云端上传完成。发布失败须报告具体阶段；不要把失败之后未执行的 push/deploy 宣称完成。恢复旧版本可使用旧安装目录的启动器和备份，先停当前服务并检查数据兼容性，不直接覆盖正在写入的 SQLite。
+数据库备份位于应用本机数据目录的 release-backups，包含 personal/demo 和已存在的 workflow-jobs 数据库；原件与认证配置留在原位置。后台资料快照不进入 Git 或 OneDrive 记录镜像；已保存草稿与质量报告正常镜像。OneDrive 可恢复记录及已归档原件，但本机 last_sync 不证明云端上传完成。发布失败须报告具体阶段；不要把失败之后未执行的 push/deploy 宣称完成。恢复旧版本先停服务并检查兼容性，不覆盖正在写入的 SQLite；中断任务只显式重试，不自动重复模型调用。

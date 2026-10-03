@@ -4,6 +4,15 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.5.0 harness revision, 2026-10-04
+
+- Synthetic quality fixtures cover all13 recipes, unambiguous constraints, table parsing, source labels, completion cutoffs and false full-read/DD/model-recalculation claims. Clean review does not set facts_verified. Integration verifies independent critic JSON, blocking repair/re-review, one-repair limit, visible warnings and stale checks after editing.
+- Durable-job tests cover concurrent duplicate requests, workspace isolation, immutable evidence, memory conversion, project-context edits, bounded queue, restart interruption/retry, saved-generation checkpoint recovery, provider identity changes before/between calls and credential rotation without durable secret storage.
+- Updated isolated Chrome groups cover quick acceptance, unlocked composer/navigation, actual stage snapshots, reload, disconnect/backoff, failed/interrupted retry, stable expanded quality cards, findings, stale edits and desktop/mobile overflow. Browser model responses are synthetic; no production records are modified.
+- A real source-only synthetic GPT-6 Luna canary traversed installed DSH: source directory → actual source read → exact final draft check → completed turn/final/exit0. The trace recorded126/126 source characters. Disposable launcher lifecycle tests also reject failed disposal; budgets, trace spans, unselected sources and cancelled runs fail closed.
+- A live synthetic thorough job traversed the existing compatible bridge, returned acceptance immediately, repaired a draft once, and saved only after a second review plus deterministic checks: exactly three data rows, one table and one follow-up question, actual/forecast labels and a valid source tag. The canary exposed a Chinese row/header constraint parsing gap, which was fixed and rerun; the final assert checks actual counts, not merely completed status.
+- These are bounded acceptance and transport checks, not a broad factual-quality benchmark. Each deployment still runs the SOP suite and verifies the installed/source/remote revisions; remote CI is checked after push.
+
 ### 1.4.0 revision, 2026-10-04
 
 - Complete Python unit/HTTP suite runs on isolated temporary data; covers automatic grouping/old-record migration, immutable originals and delayed mirror recovery, explicit-source recipes and model failures, request retry/concurrency/workspace cache boundaries, memory boundaries, typed-model reopen/recompute/saved XLSX, annual LBO economics and online SQLite WAL backups. Three Windows real-symlink tests are skipped; simulated reparse checks still run.

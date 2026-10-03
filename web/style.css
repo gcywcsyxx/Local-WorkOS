@@ -705,3 +705,16 @@ body.drop-active::after{content:"松手即导入：文件或文本都会保存�
 .question-box textarea{font-size:14px}.question-bottom select{font-size:12px}.question-bottom .button{font-size:14px}
 .source-footer{flex-wrap:wrap}.source-footer .button{min-width:100px}
 .valuation-scenarios>details>summary{font-size:14px;cursor:pointer}.valuation-scenarios table{font-size:14px}
+
+/* Durable work runs keep the single composer free while the server advances. */
+.workflow-jobs,.workflow-results{display:grid;gap:18px;min-width:0}.workflow-jobs:empty,.workflow-results:empty{display:none}
+.workflow-job{padding:20px;min-width:0}.workflow-job h3{font-size:16px;margin:0}.workflow-job p{overflow-wrap:anywhere}
+.job-current{display:flex;align-items:flex-start;gap:9px;font-size:14px;color:var(--accent);margin:14px 0}
+.job-current .icon{flex-shrink:0}.job-stages{display:flex;flex-wrap:wrap;gap:9px 16px;padding:0;margin:16px 0;list-style:none}
+.job-stages li{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px}.job-stages .icon{width:15px;height:15px}
+.job-stages .stage-running{color:var(--accent);font-weight:600}.job-stages .stage-completed,.job-stages .stage-done{color:#4e7545}
+.job-failed{border-color:#e6d1cd}.workflow-reconnect{align-items:flex-start}.workflow-reconnect button{margin-left:8px}
+.workflow-activity{font-size:14px;color:var(--accent);margin-bottom:18px}.quality-report table{font-size:13px}.quality-report td{vertical-align:top}
+.quality-report h4{margin:16px 0 6px;font-size:14px}.quality-report ul{padding-left:20px;font-size:13px;overflow-wrap:anywhere}.quality-status{color:var(--ink)}
+.quality-report .review-issues li{margin:12px 0}.quality-report blockquote{border-left:3px solid var(--line);padding:8px 12px;margin:8px 0;font-size:13px;overflow-wrap:anywhere}.quality-stale{border-color:#e7d4b0;background:var(--amber-soft)}
+@media(max-width:760px){.workflow-job{padding:16px}.job-stages{gap:8px 12px}.workflow-reconnect button{margin:8px 0 0}.quality-report td{min-width:90px}}

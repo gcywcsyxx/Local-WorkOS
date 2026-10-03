@@ -9,11 +9,12 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const { randomUUID } = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const chromeExecutable = process.env.WORKOS_TEST_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const failures = [], requests = [], originalRequests = [], runtimeErrors = [], interceptionErrors = [];
-const workflowCache = new Map(), workflowAttempts = new Map();
+const workflowJobs = new Map(), workflowRequestKeys = new Map();
 let temp, server, chrome, cdp, origin, csrf, checks = 0;
 
 async function freePort() {
@@ -136,6 +137,59 @@ async function stop(child, label) {
   await Promise.race([exited, delay(6000)]);
   if (child.exitCode === null && child.signalCode === null) throw new Error('Created ' + label + ' process did not stop: ' + child.pid);
 }
+function workflowPosts(){return requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST');}
+async function fulfillJson(event,result,status=200){
+  return cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:status,responseHeaders:[{name:'Content-Type',value:'application/json; charset=utf-8'}],body:Buffer.from(JSON.stringify(result)).toString('base64')});
+}
+const mockStages=()=>['prepare','generate','check','review','repair','save'].map((key,index)=>({key,label:['整理范围','生成正文','检查结构','复核证据','修订内容','保存草稿'][index],status:'pending',detail:''}));
+async function finishMockWorkflow(meta){
+  const job=meta.job;
+  const docs=meta.documents;
+  const coverage=docs.map((item,index)=>({document_id:item.id,source_id:'S'+(index+1),title:item.title,excerpt_chars:item.content.length,total_chars:item.content.length,truncated:false}));
+  const text='# Synthetic saved workflow\n\n**Editable draft**\n\n- Synthetic finding'+(docs.length?' [S1]':'')+'\n\n| Item | Status |\n| --- | --- |\n| Synthetic result | Draft |';
+  const quality_report={status:'needs_review',label:'流程检查完成',can_save:true,facts_verified:false,harness:'synthetic',checks:[{id:'coverage',label:'资料覆盖',status:docs.length?'pass':'warn',detail:docs.length?'Selected synthetic evidence only.':'No selected evidence.'},{id:'table_structure',label:'table structure',status:'pass',detail:'Synthetic Markdown structure checked.'},{id:'verification',label:'外部事实核实',status:'not_checked',detail:'Synthetic fixture; no fact verification.'}],metrics:{sources:docs.length},constraints:{table_required:true,table_count:1,table_columns:2},limitations:['Synthetic mocked pipeline; no real model called.'],review:{status:'advisory_complete',verdict:'issues_found',scope:'Synthetic source excerpts only; no outside verification.',issues:[{criterion:'Evidence support',severity:'warning',quote:'Synthetic finding',explanation:'Synthetic unresolved evidence question.',proposed_fix:'Request specific supporting source evidence.',source_ids:docs.length?['S1']:[]}]}};
+  const deliverable=await api('deliverables',{title:'Synthetic '+job.workflow_key+' draft',kind:'自定义',project_id:job.project_id,body:text,workflow_key:job.workflow_key,source_ids:job.document_ids,coverage,generation_id:job.id,quality_report});
+  job.result={answer:text,citations:docs.map(item=>({document_id:item.id,title:item.title,quote:item.content.slice(0,100),ordinal:1})),coverage,deliverable,quality_report,workflow_key:job.workflow_key,mode:'model',limitations:['Synthetic mocked model response; no real model called.']};
+  job.status='completed';job.stage='save';job.stages.forEach(stage=>stage.status='completed');job.updated_at=new Date().toISOString();job.revision++;
+}
+async function mockWorkflowRequest(event,url){
+  if(!url.pathname.startsWith('/api/workflows/jobs'))return false;
+  const workspace=Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workspace')?.[1]||'personal';
+  if(url.pathname==='/api/workflows/jobs'&&event.request.method==='GET'){
+    await fulfillJson(event,{jobs:[...workflowJobs.values()].filter(meta=>meta.workspace===workspace).map(meta=>meta.job).reverse()});return true;
+  }
+  if(url.pathname==='/api/workflows/jobs'&&event.request.method==='POST'){
+    const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body});
+    const cacheKey=workspace+':'+body.request_id;
+    if(workflowRequestKeys.has(cacheKey)){await fulfillJson(event,{job:workflowJobs.get(workflowRequestKeys.get(cacheKey)).job},202);return true;}
+    const id=randomUUID(),stamp=new Date(body.message==='Synthetic durable running job'?Date.now()-120000:Date.now()).toISOString();
+    const job={id,workflow_key:body.workflow_key,message:body.message,project_id:body.project_id,document_ids:body.document_ids,mode:body.mode,model_id:body.model_id,quality_mode:body.quality_mode,status:'queued',stage:'prepare',stages:mockStages(),revision:1,created_at:stamp,updated_at:stamp,poll_after_ms:1500,retryable:false};
+    const documents=await Promise.all(body.document_ids.map(documentId=>api('documents/'+documentId)));
+    workflowJobs.set(id,{workspace,job,documents,reads:0,attempts:1,hold:body.message==='Synthetic durable running job',disconnectOnce:false});workflowRequestKeys.set(cacheKey,id);
+    await fulfillJson(event,{job},202);return true;
+  }
+  const parts=url.pathname.split('/'),meta=workflowJobs.get(parts[4]);
+  if(!meta||meta.workspace!==workspace){await fulfillJson(event,{error:'Synthetic job not found'},404);return true;}
+  if(parts[5]==='retry'&&event.request.method==='POST'){
+    requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
+    meta.attempts++;meta.reads=0;meta.hold=false;meta.job.status='queued';meta.job.error='';meta.job.retryable=false;meta.job.stage='prepare';meta.job.stages=mockStages();meta.job.revision++;
+    await fulfillJson(event,{job:meta.job},202);return true;
+  }
+  if(event.request.method==='GET'){
+    if(meta.disconnectOnce){meta.disconnectOnce=false;await fulfillJson(event,{error:'Synthetic temporary connection failure'},503);return true;}
+    if(['queued','running'].includes(meta.job.status)){
+      meta.reads++;meta.job.status='running';meta.job.stage=meta.reads===1?'generate':'review';meta.job.revision++;meta.job.updated_at=new Date().toISOString();
+      meta.job.stages.forEach(stage=>stage.status=stage.key==='prepare'?'completed':stage.key===meta.job.stage?'running':'pending');
+      if(meta.reads>=2&&!meta.hold){
+        if(meta.job.message==='Synthetic unavailable provider'||(meta.job.message==='Synthetic retryable provider'&&meta.attempts===1)){
+          meta.job.status='failed';meta.job.error='Synthetic provider unavailable. Configure a supported model and retry.';meta.job.retryable=true;meta.job.stages.find(stage=>stage.key===meta.job.stage).status='failed';
+        }else await finishMockWorkflow(meta);
+      }
+    }
+    await fulfillJson(event,{job:meta.job});return true;
+  }
+  throw Error('Unexpected synthetic job request '+url.pathname);
+}
 async function main() {
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'workos-research-cdp-'));
   const port = await freePort(), debugPort = await freePort(); origin = 'http://127.0.0.1:' + port;
@@ -171,19 +225,7 @@ async function main() {
     if (url.origin !== origin) return cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
     if (/^\/api\/documents\/[^/]+\/original$/.test(url.pathname)) originalRequests.push(url.pathname);
     if(url.pathname==='/api/workflows/plan') requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
-    if(url.pathname==='/api/workflows/run'){
-      const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body});
-      workflowAttempts.set(body.request_id,(workflowAttempts.get(body.request_id)||0)+1);
-      if(body.message==='Synthetic unavailable provider'||(body.message==='Synthetic retryable provider'&&workflowAttempts.get(body.request_id)===1))return cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:503,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify({error:'Synthetic provider unavailable. Configure a supported model and retry.'})).toString('base64')});
-      if(workflowCache.has(body.request_id))return cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:201,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify(workflowCache.get(body.request_id))).toString('base64')});
-      const docs=await Promise.all(body.document_ids.map(id=>api('documents/'+id)));
-      const coverage=docs.map((item,index)=>({document_id:item.id,source_id:'S'+(index+1),title:item.title,excerpt_chars:item.content.length,total_chars:item.content.length,truncated:false}));
-      const text='# Synthetic saved workflow\n\n**Editable draft**\n\n- Synthetic finding'+(docs.length?' [S1]':'')+'\n\n| Item | Status |\n| --- | --- |\n| Synthetic result | Draft |';
-      const deliverable=await api('deliverables',{title:'Synthetic '+body.workflow_key+' draft',kind:'自定义',project_id:body.project_id,body:text,workflow_key:body.workflow_key,source_ids:body.document_ids,coverage});
-      const result={answer:text,citations:docs.map((item,index)=>({document_id:item.id,title:item.title,quote:item.content.slice(0,100),ordinal:1})),coverage,deliverable,workflow_key:body.workflow_key,mode:'model',limitations:['Synthetic mocked model response; no real model called.']};
-      workflowCache.set(body.request_id,result);
-      return cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:201,responseHeaders:[{name:'Content-Type',value:'application/json; charset=utf-8'}],body:Buffer.from(JSON.stringify(result)).toString('base64')});
-    }
+    if(await mockWorkflowRequest(event,url))return;
     if (['/api/ask', '/api/agent'].includes(url.pathname)) {
       const body = JSON.parse(event.request.postData || '{}'); requests.push({ path: url.pathname, method: event.request.method, body });
       const result = url.pathname === '/api/ask' ? { answer, mode: 'model', elapsed_ms: 1, citations: [{ document_id: doc.id, id: source.chunks[0].id, ordinal: source.chunks[0].ordinal, title: doc.title, quote }] } : { answer, steps: [] };
@@ -329,14 +371,14 @@ async function main() {
     await route('overview');await select('#start-project',alpha.id);await fill('#start-input','审阅协议并指出交易条款需要核实的问题');await click('#start-form button[type=submit]');
     await until(()=>cdp.evaluate("location.hash==='#research' && document.querySelector('#research-intent').value==='workflow'"),'legal workflow stage');
     const result=await cdp.evaluate("({key:document.querySelector('#workflow-purpose').value,project:document.querySelector('#research-project').value,selected:[...document.querySelectorAll('[data-source-id]')].filter(e=>e.checked).length,composers:document.querySelectorAll('main textarea').length})");
-    assert(result.key==='legal'&&result.project===alpha.id&&result.selected===0&&result.composers===1,'Bad staged workflow: '+JSON.stringify(result));
-    assert(!requests.some(r=>r.path==='/api/workflows/run'),'Planning silently generated/sent sources');
+    assert(result.key==='legal'&&result.project===alpha.id&&result.selected===0&&result.composers===1&&await cdp.evaluate("document.querySelector('#workflow-quality').value==='thorough'"),'Bad staged workflow: '+JSON.stringify(result));
+    assert(!requests.some(r=>r.path==='/api/workflows/jobs'),'Planning silently generated/sent sources');
     const plan=requests.find(r=>r.path==='/api/workflows/plan');assert(plan&&Object.keys(plan.body).length===1&&!JSON.stringify(plan.body).includes(quote),'Intent plan sent project materials');
-    await click('#ask-form button[type=submit]');await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,150))');assert(!requests.some(r=>r.path==='/api/workflows/run'),'Required-source recipe ran without selected material');
+    await click('#ask-form button[type=submit]');await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,150))');assert(!requests.some(r=>r.path==='/api/workflows/jobs'),'Required-source recipe ran without selected material');
     await click('[data-source-id="'+doc.id+'"]');await click('#ask-form button[type=submit]');
-    await until(()=>requests.some(r=>r.path==='/api/workflows/run'),'workflow explicit generation');await until(()=>cdp.evaluate("!!document.querySelector('.workflow-result')&&!document.querySelector('#question-input').disabled"),'saved workflow UI');
-    const request=requests.find(r=>r.path==='/api/workflows/run');assert(request.body.workflow_key==='legal'&&JSON.stringify(request.body.document_ids)===JSON.stringify([doc.id])&&request.body.project_id===alpha.id,'Workflow source scope wrong');
-    const saved=(await api('state')).deliverables.find(i=>i.title==='Synthetic legal draft');assert(saved?.workflow_key==='legal'&&saved.source_ids.includes(doc.id)&&saved.body.includes('Editable draft'),'Workflow draft was not persisted');
+    await until(()=>requests.some(r=>r.path==='/api/workflows/jobs'),'workflow explicit generation');await until(()=>cdp.evaluate("!!document.querySelector('.workflow-result')&&!document.querySelector('#question-input').disabled"),'saved workflow UI');
+    const request=requests.find(r=>r.path==='/api/workflows/jobs');assert(request.body.workflow_key==='legal'&&JSON.stringify(request.body.document_ids)===JSON.stringify([doc.id])&&request.body.project_id===alpha.id,'Workflow source scope wrong');
+    const saved=(await api('state')).deliverables.find(i=>i.title==='Synthetic legal draft');assert(saved?.workflow_key==='legal'&&saved.source_ids.includes(doc.id)&&saved.body.includes('Editable draft')&&saved.quality_report?.facts_verified===false&&saved.generation_id,'Workflow draft was not persisted');
     assert(await cdp.evaluate("!!document.querySelector('.workflow-result .markdown-body h1') && !!document.querySelector('.workflow-result [data-action=workflow-citation]') && document.querySelector('.workflow-result').textContent.includes('已保存')"),'Workflow Markdown/citation/saved status missing');
     await cdp.evaluate("document.querySelector('.question-panel').scrollIntoView({block:'start',behavior:'instant'})");await screenshot('workflow-result-1280');
     await click('.workflow-result [data-action=workflow-citation]');await until(()=>cdp.evaluate("document.querySelector('#document-dialog').open && document.querySelector('#document-title').textContent==='Synthetic Alpha Evidence'"),'workflow citation original');await click('[data-close-dialog=document-dialog]');
@@ -345,36 +387,65 @@ async function main() {
     await route('overview');await fill('#start-input','写一封英文邮件，请对方下周提供财务数据');await select('#start-purpose','');await click('#start-form button[type=submit]');
     await until(()=>cdp.evaluate("location.hash==='#research'&&document.querySelector('#workflow-purpose')?.value==='email'"),'email workflow staged');
     assert(await cdp.evaluate("[...document.querySelectorAll('[data-source-id]')].every(e=>!e.checked) && ![...document.querySelector('#ask-mode').options].some(o=>o.value==='local')"),'Email inherited old sources or misleading no-outbound workflow option');
-    await click('#ask-form button[type=submit]');await until(()=>requests.filter(r=>r.path==='/api/workflows/run').length===2,'email generation');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&document.querySelectorAll('.workflow-result').length===2"),'email saved');
-    const request=requests.filter(r=>r.path==='/api/workflows/run')[1];assert(request.body.workflow_key==='email'&&request.body.document_ids.length===0,'Email sent old selected documents');
-    const saved=(await api('state')).deliverables.find(i=>i.title==='Synthetic email draft');assert(saved?.source_ids.length===0,'No-source email draft metadata wrong');
+    await click('#ask-form button[type=submit]');await until(()=>requests.filter(r=>r.path==='/api/workflows/jobs').length===2,'email generation');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&document.querySelectorAll('.workflow-result').length===2"),'email saved');
+    const request=requests.filter(r=>r.path==='/api/workflows/jobs')[1];assert(request.body.workflow_key==='email'&&request.body.document_ids.length===0,'Email sent old selected documents');
+    const saved=(await api('state')).deliverables.find(i=>i.title==='Synthetic email draft');assert(saved?.source_ids.length===0&&request.body.quality_mode==='fast','No-source email draft metadata or default mode wrong');
     await click('.workflow-result [data-action=open-record]');await until(()=>cdp.evaluate("location.hash==='#deliverables'&&!!document.querySelector('#deliverable-body')"),'saved draft opened');
-    await fill('#deliverable-body','Synthetic edited email ready for human review.');await click('#deliverable-form button[type=submit]');await until(async()=>((await api('state')).deliverables.find(i=>i.id===saved.id)?.body==='Synthetic edited email ready for human review.'),'edited draft persisted');await until(()=>cdp.evaluate("!document.querySelector('#deliverable-form button[type=submit]').disabled"),'draft save UI complete');
+    assert(await cdp.evaluate("!!document.querySelector('#deliverable-form .quality-report')&&document.querySelector('#deliverable-form .quality-report').textContent.includes('事实仍需核实')"),'Saved draft lost persisted quality report');
+    await fill('#deliverable-body','Synthetic edited email ready for human review.');assert(await cdp.evaluate("document.querySelector('#deliverable-form .quality-report').textContent.includes('编辑后未重新检查')"),'Unsaved body edits retained current-check claim');await click('#deliverable-form button[type=submit]');await until(async()=>((await api('state')).deliverables.find(i=>i.id===saved.id)?.body==='Synthetic edited email ready for human review.'),'edited draft persisted');await until(()=>cdp.evaluate("!document.querySelector('#deliverable-form button[type=submit]').disabled"),'draft save UI complete');const edited=(await api('state')).deliverables.find(item=>item.id===saved.id);assert(edited.quality_report?.stale&&edited.quality_report.checks.length===0&&await cdp.evaluate("document.querySelector('#deliverable-form .quality-report').textContent.includes('编辑后未重新检查')"),'Saved body edits did not invalidate old checks');
   });
   await check('provider failures are visible and do not claim a saved draft', async () => {
     await route('research');const before=(await api('state')).deliverables.length;await fill('#question-input','Synthetic unavailable provider');await click('#ask-form button[type=submit]');
-    await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&document.querySelector('#toast-region').textContent.includes('Synthetic provider unavailable')"),'provider failure visible');
+    await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&[...document.querySelectorAll('.workflow-job')].some(e=>e.dataset.jobStatus==='failed'&&e.textContent.includes('Synthetic unavailable provider'))"),'provider failure visible');
     assert((await api('state')).deliverables.length===before,'Failure created an empty saved draft');
     assert(await cdp.evaluate("[...document.querySelectorAll('#ask-form .banner')].some(e=>e.textContent.includes('DeepSeek'))&&!document.querySelector('#ask-form').textContent.includes('尚未配置模型连接')"),'DeepSeek preset shows incorrect unconfigured generic provider status');
   });
   await check('workflow retries retain request IDs and completed repeats reuse saved drafts', async () => {
-    const count=()=>requests.filter(r=>r.path==='/api/workflows/run').length;
-    await fill('#question-input','Synthetic retryable provider');let before=count();await click('#ask-form button[type=submit]');
-    await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&document.querySelector('.question-panel').textContent.includes('草稿未生成')"),'retryable provider failed');
-    const first=requests.filter(r=>r.path==='/api/workflows/run')[before];assert(/^[A-Za-z0-9_-]{8,100}$/.test(first.body.request_id),'Valid workflow request ID missing');
-    const savedBefore=(await api('state')).deliverables.length;await click('#ask-form button[type=submit]');await until(()=>count()===before+2,'retry sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&!document.querySelector('.question-panel').textContent.includes('草稿未生成')"),'retry completed');
-    const second=requests.filter(r=>r.path==='/api/workflows/run')[before+1];assert(second.body.request_id===first.body.request_id,'Provider retry created a new request ID');
+    const count=()=>workflowPosts().length;
+    await fill('#question-input','Synthetic retryable provider');const before=count();await click('#ask-form button[type=submit]');await until(()=>count()===before+1,'retryable job accepted');
+    const first=workflowPosts()[before],meta=[...workflowJobs.values()].find(item=>item.job.message===first.body.message);assert(/^[A-Za-z0-9_-]{8,100}$/.test(first.body.request_id),'Valid workflow request ID missing');
+    await until(()=>cdp.evaluate(`document.querySelector(${q('[data-job-id="'+meta.job.id+'"]')})?.dataset.jobStatus==='failed'`),'retryable provider job failed');
+    const savedBefore=(await api('state')).deliverables.length;await click('#ask-form button[type=submit]');await until(()=>count()===before+2,'failed repeat sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'failed repeat returned');
+    assert(workflowPosts()[before+1].body.request_id===first.body.request_id,'Failed repeat created a new request ID');
+    await click('[data-action=workflow-job-retry][data-id="'+meta.job.id+'"]');await until(()=>meta.job.status==='completed','retry job completed');await until(()=>cdp.evaluate(`!!document.querySelector(${q('.workflow-result [data-action=open-record][data-id="'+meta.job.result.deliverable.id+'"]')})`),'retried saved draft visible');
+    const retry=requests.find(item=>item.path==='/api/workflows/jobs/'+meta.job.id+'/retry');assert(retry&&Object.keys(retry.body).length===0&&meta.job.message===first.body.message,'Retry changed original captured scope');
     const results=await cdp.evaluate("document.querySelectorAll('.workflow-result').length");await click('#ask-form button[type=submit]');await until(()=>count()===before+3,'completed repeat sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'completed repeat returned');
     assert((await api('state')).deliverables.length===savedBefore+1&&await cdp.evaluate("document.querySelectorAll('.workflow-result').length")===results,'Completed repeat duplicated a draft or result card');
-    await fill('#question-input','Synthetic changed retry instruction');await click('#ask-form button[type=submit]');await until(()=>count()===before+4,'changed request sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'changed request completed');
-    const changed=requests.filter(r=>r.path==='/api/workflows/run')[before+3];assert(changed.body.request_id!==first.body.request_id,'Changed message reused old request ID');
-    await click('[data-source-id="'+doc.id+'"]');await click('#ask-form button[type=submit]');await until(()=>count()===before+5,'changed source request sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'changed source completed');
-    const sourced=requests.filter(r=>r.path==='/api/workflows/run')[before+4];assert(sourced.body.request_id!==changed.body.request_id&&sourced.body.document_ids.includes(doc.id),'Changed sources reused old request ID');
+    await fill('#question-input','Synthetic changed retry instruction');await click('#ask-form button[type=submit]');await until(()=>count()===before+4,'changed request sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'changed request accepted');
+    const changed=workflowPosts()[before+3];assert(changed.body.request_id!==first.body.request_id,'Changed message reused old request ID');
+    await click('[data-source-id="'+doc.id+'"]');await click('#ask-form button[type=submit]');await until(()=>count()===before+5,'changed source request sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'changed source accepted');
+    const sourced=workflowPosts()[before+4];assert(sourced.body.request_id!==changed.body.request_id&&sourced.body.document_ids.includes(doc.id),'Changed sources reused old request ID');
     await route('overview');await click('[data-action=project-detail][data-id="'+alpha.id+'"]');await select('#library-group','');await cdp.evaluate("document.querySelectorAll('.material-family').forEach(e=>e.open=true)");
     await click('[data-action=edit][data-collection=documents][data-id="'+doc.id+'"]');await until(()=>cdp.evaluate("!!document.querySelector('#field-content')"),'source edit dialog');await fill('#field-content',quote+'\nSynthetic updated source text.');await click('#modal form button[type=submit]');await until(()=>cdp.evaluate("!document.querySelector('#modal').open"),'source edit completed');await route('research');
-    await click('#ask-form button[type=submit]');await until(()=>count()===before+6,'updated source sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'updated source complete');
-    assert(requests.filter(r=>r.path==='/api/workflows/run')[before+5].body.request_id!==sourced.body.request_id,'Edited source reused stale cached draft');
+    await click('#ask-form button[type=submit]');await until(()=>count()===before+6,'updated source sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'updated source accepted');
+    const updated=workflowPosts()[before+5];assert(updated.body.request_id!==sourced.body.request_id,'Edited source reused stale cached draft');
+    const model=updated.body.model_id;await select('#workflow-quality','thorough');await click('#ask-form button[type=submit]');await until(()=>count()===before+7,'changed quality sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'changed quality accepted');
+    const quality=workflowPosts()[before+6];assert(quality.body.request_id!==updated.body.request_id&&quality.body.quality_mode==='thorough'&&quality.body.model_id===model,'Quality change reused cache or silently changed provider');
     assert(await cdp.evaluate("document.querySelectorAll('#toast-region .toast').length<=2"),'More than two toast messages cover the work surface');
+    await until(()=>[...workflowJobs.values()].filter(item=>item.job.status==='running'||item.job.status==='queued').length===0,'short jobs finished');
+  });
+  await check('durable jobs preserve composer focus reconnect restore workspace and retry interrupted work', async () => {
+    await select('#workflow-purpose','dd');assert(await cdp.evaluate("document.querySelector('#workflow-quality').value==='thorough'"),'Complex task does not default to thorough');
+    await fill('#question-input','Synthetic durable running job');await click('#ask-form button[type=submit]');const meta=await until(()=>[...workflowJobs.values()].find(item=>item.job.message==='Synthetic durable running job'),'durable acceptance');const id=meta.job.id;
+    await until(()=>cdp.evaluate(`!!document.querySelector(${q('[data-job-id="'+id+'"]')})&&!document.querySelector('#question-input').disabled`),'accepted job releases composer');
+    await fill('#question-input','Synthetic next work draft');await click('#workflow-results .quality-report summary');await cdp.evaluate("window.__qualityElement=document.querySelector('#workflow-results .quality-report');window.__composerElement=document.querySelector('#question-input');window.__composerElement.focus()");
+    await until(()=>cdp.evaluate(`document.querySelector(${q('[data-job-id="'+id+'"]')})?.dataset.jobStatus==='running'`),'durable stage progress');
+    assert(await cdp.evaluate("document.querySelector('#question-input')===window.__composerElement&&document.activeElement===window.__composerElement&&window.__composerElement.value==='Synthetic next work draft'"),'Polling replaced composer or stole typing focus');
+    assert(await cdp.evaluate("document.querySelector('#workflow-results .quality-report')===window.__qualityElement&&window.__qualityElement.open"),'Polling replaced a completed result or collapsed its open quality report');
+    await cdp.evaluate(`document.querySelector(${q('[data-job-id="'+id+'"]')}).scrollIntoView({block:'start',behavior:'instant'})`);await screenshot('workflow-progress-1280');
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width:375,height:812,deviceScaleFactor:1,mobile:true});await screenshot('workflow-progress-375');assert(await cdp.evaluate("document.documentElement.scrollWidth<=document.documentElement.clientWidth+1"),'Mobile progress/quality report causes horizontal overflow');await cdp.send('Emulation.setDeviceMetricsOverride',{width:1280,height:1000,deviceScaleFactor:1,mobile:false});
+    assert(await cdp.evaluate(`document.querySelector(${q('[data-job-id="'+id+'"]')}).textContent.includes('2分')`),'Long-running job age absent');
+    meta.disconnectOnce=true;await until(()=>cdp.evaluate("!!document.querySelector('.workflow-reconnect')"),'transient reconnect visible');assert(meta.job.status==='running','Transient connection marked server job failed');await click('[data-action=workflow-reconnect]');await until(()=>cdp.evaluate("!document.querySelector('.workflow-reconnect')"),'connection restored');
+    await route('overview');assert(await cdp.evaluate("!!document.querySelector('#workflow-activity [data-action=workflow-progress]')"),'Home lost active work indicator');
+    await click('#workspace-switch');await select('#workspace-choice','demo');await click('#modal form button[type=submit]');await until(()=>cdp.evaluate("document.querySelector('#footer-workspace').textContent.includes('演示')&&!document.querySelector('#modal').open"),'demo workspace opened');assert(await cdp.evaluate("!document.querySelector('main').textContent.includes('Synthetic durable running job')&&!document.querySelector('.workflow-job')"),'Personal job leaked to demo workspace');
+    await click('#workspace-switch');await select('#workspace-choice','personal');await click('#modal form button[type=submit]');await until(()=>cdp.evaluate("document.querySelector('#footer-workspace').textContent.includes('个人')&&!document.querySelector('#modal').open"),'personal workspace restored');await route('research');assert(await cdp.evaluate("document.querySelector('#question-input').value==='Synthetic next work draft'"),'Workspace return lost independent composer draft');
+    await cdp.send('Page.reload');await until(()=>cdp.evaluate(`!!document.querySelector(${q('[data-job-id="'+id+'"]')})&&!document.querySelector('#question-input').disabled&&document.querySelector('main').getAttribute('aria-busy')!=='true'`),'durable job restored after reload');
+    assert(await cdp.evaluate("document.querySelectorAll('main textarea').length===1&&[...document.querySelectorAll('[data-source-id]')].every(item=>!item.checked)"),'Restoration added composer or silently selected captured sources');
+    meta.job.status='interrupted';meta.job.error='Synthetic server restart interrupted generation.';meta.job.retryable=true;meta.job.revision++;await until(()=>cdp.evaluate(`document.querySelector(${q('[data-job-id="'+id+'"]')})?.dataset.jobStatus==='interrupted'`),'interrupted job visible');
+    await click('[data-action=workflow-job-retry][data-id="'+id+'"]');await until(()=>meta.job.status==='completed','interrupted job retry complete');const saved=meta.job.result.deliverable;
+    await until(()=>cdp.evaluate(`!!document.querySelector(${q('.workflow-result [data-action=open-record][data-id="'+saved.id+'"]')})`),'completed restored result visible');assert(saved.generation_id===id&&saved.quality_report?.facts_verified===false&&meta.job.document_ids.includes(doc.id),'Retry failed to preserve job scope and quality report');
+    await click('.workflow-result [data-action=open-record][data-id="'+saved.id+'"]');await until(()=>cdp.evaluate("location.hash==='#deliverables'&&!!document.querySelector('#deliverable-form .quality-report')"),'quality report reopened with saved draft');await click('#deliverable-form .quality-report summary');assert(await cdp.evaluate("document.querySelector('#deliverable-form .quality-report').textContent.includes('Synthetic unresolved evidence question.')&&document.querySelector('#deliverable-form .quality-report').textContent.includes('事实仍需核实')&&document.querySelector('#deliverable-form .quality-report').textContent.includes('Request specific supporting source evidence.')&&document.querySelector('#deliverable-form .quality-report').textContent.includes('表格结构')"),'Saved report lost canonical review fields or falsely claimed verified facts');
+    await cdp.evaluate("document.querySelector('#deliverable-form .quality-report').scrollIntoView({block:'start',behavior:'instant'})");await screenshot('quality-report-1280');
   });
   await check('meeting model and organization intents route to working staged screens', async () => {
     const before=(await api('state')).meetings;

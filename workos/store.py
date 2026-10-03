@@ -27,7 +27,7 @@ FIELDS = {
 }
 for _collection_name in ORGANIZED_COLLECTIONS:
  FIELDS[_collection_name] |= ORGANIZATION_FIELDS
-FIELDS['deliverables'] |= MODEL_FIELDS | WORKFLOW_FIELDS
+FIELDS['deliverables'] |= MODEL_FIELDS | WORKFLOW_FIELDS | {'quality_report','generation_id'}
 for _collection_name in ('documents','meetings','notes','deliverables'):
  FIELDS[_collection_name].add('review_comments')
 ENUMS = {
@@ -49,7 +49,7 @@ DEFAULTS = {
 }
 for _collection_name in ORGANIZED_COLLECTIONS:
  DEFAULTS[_collection_name].update(EMPTY_ORGANIZATION)
-DEFAULTS['deliverables'].update(method='',assumptions={},result={},workflow_key='',source_ids=[],coverage=[])
+DEFAULTS['deliverables'].update(method='',assumptions={},result={},workflow_key='',source_ids=[],coverage=[],quality_report={},generation_id='')
 for _collection_name in ('documents','meetings','notes','deliverables'):
  DEFAULTS[_collection_name]['review_comments']=[]
 
@@ -110,7 +110,12 @@ class Store:
   extra=set(obj)-allowed
   if extra: raise ValueError('存在不支持的字段：'+', '.join(sorted(extra)))
   for key,value in obj.items():
-   if col=='deliverables' and key in ('assumptions','result'):
+   if col=='deliverables' and key=='quality_report':
+    validate_object(value,'质量检查结果')
+    if value:value['facts_verified']=False
+   elif col=='deliverables' and key=='generation_id':
+    if not isinstance(value,str) or (value and not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}',value)):raise ValueError('生成任务编号无效')
+   elif col=='deliverables' and key in ('assumptions','result'):
     validate_object(value,'模型假设' if key=='assumptions' else '模型结果')
    elif col=='deliverables' and key=='source_ids':
     validate_source_ids(value)
@@ -259,6 +264,11 @@ class Store:
   with self.lock,self.db:
    current=self.get(col,id)
    updated={**current,**data,'updated_at':now()}
+   if col=='deliverables' and current.get('quality_report') and any(key in data and data[key]!=current.get(key) for key in ('body','source_ids','coverage','workflow_key')):
+    updated['quality_report']={**current['quality_report'],'status':'needs_review','label':'编辑后未重新检查',
+      'stale':True,'facts_verified':False,'checks':[],
+      'review':{'required':True,'status':'stale','issues':[],'factual_truth_verified':False},
+      'limitations':['原检查针对生成时的正文；编辑后需重新核实。']}
    if col=='meetings' and 'summary' in data and data['summary']!=current.get('summary') and not {'experts','matrix','contents'}&set(data):
     updated.update(experts=[],matrix={},contents=[])
    self._validate(col,updated)

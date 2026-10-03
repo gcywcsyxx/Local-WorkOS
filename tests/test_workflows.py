@@ -78,6 +78,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_user_scope_overrides_default_recipe_structure(self):
         request = '请只给简短3行表格和一个跟进问题，不要完整报告'
+        self.app.local_chat.return_value = ('| 要点 | 证据 |\n| --- | --- |\n| A | [S1] |\n| B | [S1] |\n| C | [S1] |\n\n1. 下一步如何核实？', 'Synthetic model')
         for key in ('brief', 'ic', 'email'):
             with self.subTest(workflow_key=key):
                 run_workflow(self.app, self.store, {**self.request(), 'workflow_key':key, 'message':request})
