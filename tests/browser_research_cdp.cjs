@@ -239,7 +239,12 @@ async function main() {
       if(csrfScenario.mode==='forbidden')return fulfillJson(event,{code:'permission_denied',error:'Synthetic permissions denied'},403);
       if(csrfScenario.parseRequests.filter(item=>item.mode==='recover').length===1){
         await cdp.evaluate("window.__csrfPendingReview=document.querySelector('.valuation-review');window.__csrfPendingMain=document.querySelector('#main')");
-        return fulfillJson(event,{code:'csrf_expired',error:'会话校验失败，请刷新页面'},403);
+        // The real temporary server rejects the stale token before any model call.
+        if(token!=='synthetic-expired-token'){
+          interceptionErrors.push('Refused to forward a parser request without the deliberately invalid token');
+          return cdp.send('Fetch.failRequest',{requestId:event.requestId,errorReason:'BlockedByClient'});
+        }
+        return cdp.send('Fetch.continueRequest',{requestId:event.requestId});
       }
       csrfScenario.retryDom=await cdp.evaluate("({sameReview:document.querySelector('.valuation-review')===window.__csrfPendingReview,sameMain:document.querySelector('#main')===window.__csrfPendingMain,ready:document.querySelector('#main').getAttribute('aria-busy')!=='true',text:document.querySelector('#valuation-text').value,json:document.querySelector('#valuation-json').value})");
       csrfScenario.successfulModelCalls++;

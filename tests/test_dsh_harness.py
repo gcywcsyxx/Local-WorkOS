@@ -130,25 +130,49 @@ sys.exit(1 if mode=='failed' else 0)
 
     def test_failed_malformed_truncated_and_timeout_processes_reject(self):
         app = self.fake_app()
-        for mode in ('failed','malformed','truncated','timeout'):
-            with self.subTest(mode=mode),patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':mode}),self.assertRaises(ValueError):
-                self.run_fake(app,timeout=0.3)
+        expected = {'failed':'DSH运行没有成功完成', 'malformed':'DSH运行事件无法解析',
+                    'truncated':'DSH运行事件被截断', 'timeout':'DSH模型响应超时'}
+        for mode, reason in expected.items():
+            with self.subTest(mode=mode),patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':mode}),self.assertRaisesRegex(ValueError,reason):
+                # A cold process must reach its malformed/failed output; only the
+                # intentional hang uses a short timeout as the rejection oracle.
+                self.run_fake(app,timeout=0.3 if mode=='timeout' else 15)
             self.assertFalse(app.dsh_lock.locked())
 
     def test_cancellation_terminates_subprocess_and_releases_lock(self):
         app = self.fake_app()
-        with patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':'timeout'}),self.assertRaises(ValueError):
+        with patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':'timeout'}),self.assertRaisesRegex(ValueError,'工作已取消'):
             self.run_fake(app,progress_callback=lambda event:False)
         self.assertFalse(app.dsh_lock.locked())
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the lifecycle launcher test')
     def test_launcher_closes_residual_handles_after_runtime_exit_code(self):
         entry = self.root/'synthetic_runtime.mjs'
-        entry.write_text("console.log(JSON.stringify({type:'status',phase:'turn_end',reason:{kind:'completed'}}));console.log(JSON.stringify({type:'final',text:'Synthetic complete result'}));process.exitCode=Number(process.env.WORKOS_SYNTHETIC_EXIT||0);setInterval(()=>{},1000);",encoding='utf-8')
+        entry.write_text("""import {writeFileSync} from 'node:fs';
+console.log(JSON.stringify({type:'status',phase:'turn_end',reason:{kind:'completed'}}));
+console.log(JSON.stringify({type:'final',text:'Synthetic complete result'}));
+setTimeout(()=>{
+ const code=Number(process.env.WORKOS_SYNTHETIC_EXIT);
+ writeFileSync(process.env.WORKOS_SYNTHETIC_DISPOSED,String(code));
+ process.exitCode=code;
+},200);
+setInterval(()=>{},1000);
+""",encoding='utf-8')
         app = SimpleNamespace(dsh_available=True,dsh_lock=threading.Lock(),dsh_node=shutil.which('node'),dsh_entry=entry)
-        self.assertEqual(run(app,'Synthetic task','synthetic-model',MODELS,timeout=3)[0],'Synthetic complete result')
-        with patch.dict(os.environ,{'WORKOS_SYNTHETIC_EXIT':'1'}),self.assertRaises(ValueError):
-            run(app,'Synthetic task','synthetic-model',MODELS,timeout=3)
+        for code in (0,1):
+            disposed = self.root/('runtime-disposed-'+str(code)+'.txt')
+            with self.subTest(exit_code=code),patch.dict(os.environ,{
+                    'WORKOS_SYNTHETIC_EXIT':str(code),'WORKOS_SYNTHETIC_DISPOSED':str(disposed)}):
+                # The outer deadline allows Windows cold start. The permanent
+                # interval still hangs unless the launcher closes residual handles;
+                # the marker proves it also waited for owned runtime disposal.
+                if code == 0:
+                    self.assertEqual(run(app,'Synthetic task','synthetic-model',MODELS,timeout=15)[0],'Synthetic complete result')
+                else:
+                    with self.assertRaisesRegex(ValueError,'DSH运行没有成功完成'):
+                        run(app,'Synthetic task','synthetic-model',MODELS,timeout=15)
+                self.assertEqual(disposed.read_text(encoding='utf-8'),str(code))
+                self.assertFalse(app.dsh_lock.locked())
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the pure evidence-plugin test')
     def test_native_plugin_unknown_scope_budget_adversarial_commands_and_guard(self):

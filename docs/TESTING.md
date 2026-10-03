@@ -9,6 +9,7 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 - Real HTTP fixtures verify that stale CSRF rejection happens before writes, job creation or provider calls; Host/Origin, login and other permission failures cannot carry the recovery code.
 - The isolated browser reproduces the valuation parser failure, refreshes its token once, sends an identical request once, and keeps the natural-language/JSON drafts and pending DOM. An ordinary permission failure is shown without refresh or retry.
 - Transport tests cover concurrent refresh sharing, the retry limit, exact request preservation, invalid bootstrap data, workspace changes and aborts. Refreshing a token does not call full boot or reload the page. An already-open older client requires one page refresh to load this fix.
+- A Windows CI run exposed an existing DSH fixture's three-second cold-start deadline. Lifecycle/protocol fixtures now allow startup time and assert the specific completion/parse failure rather than accepting any timeout; the dedicated timeout fixture keeps its short deadline. The lifecycle fixture retains a never-ending handle and checks that runtime disposal actually finishes. Production deadlines are unchanged.
 
 ### 1.5.2 homepage project creation, 2026-10-04
 
