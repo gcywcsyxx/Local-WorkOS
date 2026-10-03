@@ -264,6 +264,13 @@ class ServerTests(unittest.TestCase):
         for value in ('Synthetic Investment Case','Market','100','Risks','Verify adoption','approvals slip'):
             self.assertIn(value,text)
 
+    def test_minutes_numeric_style_matches_house_rules(self):
+        from workos.exports import normalize_minute_numbers, normalize_minute_lines
+        cases={'0.13－0.5 μm':'0.13-0.5μm','约 4,000 片/月':'约 4,000 片/月','1000 片':'1,000 片','收入 12500 万元':'收入 12,500 万元','良率 50%－60%':'良率 50%-60%','FY2025A 2026':'FY2025A 2026','2026年 2026-10-03 202607':'2026年 2026-10-03 202607','型号 A1000 001234 12.1000':'型号 A1000 001234 12.1000','1000.5 元 001234 元':'1000.5 元 001234 元','专家—判断':'专家—判断'}
+        for raw,expected in cases.items():
+            with self.subTest(raw=raw):self.assertEqual(normalize_minute_numbers(raw),expected)
+        self.assertEqual(normalize_minute_lines('  • 约 1000 片\n'),'  • 约 1,000 片\n')
+
     def test_house_minutes_docx_format(self):
         from workos.exports import expert_minutes_docx
         from docx import Document

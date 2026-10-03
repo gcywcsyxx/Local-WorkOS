@@ -31,6 +31,31 @@ def html_report(record):
  state='<script type="application/json" id="report-notes-data">{"version":1,"notes":[]}</script>'
  return report.replace('</head>',editor_css+'</head>').replace('</body>',state+'<script id="report-editor-script">'+editor+'</script></body>')
 
+
+def normalize_minute_numbers(text):
+ """Format explicit amounts without reinterpreting years or identifiers."""
+ import re
+ value=str(text or '')
+ value=re.sub(r'(?<=\d)[ \t]*[%％]', '%', value)
+ value=re.sub(r'(?<=[\d%])[ \t]*[－—–﹣][ \t]*(?=\d)', '-', value)
+ value=re.sub(r'(?<=\d)[ \t]+(?=(?:μm|nm|mm|cm|km)(?![A-Za-z]))', '', value)
+ def group(match):
+  digits=match.group(1)
+  return digits if digits.startswith('0') else format(int(digits), ',')
+ value=re.sub(r'(?<![A-Za-z0-9_.,])([0-9]{4,})(?![0-9.,])(?=[ \t]*(?:百万元|万元|亿元|元|片|台|吨)(?:[^A-Za-z]|$))', group, value)
+ return value
+
+def normalize_minute_lines(summary):
+ lines=[]
+ for raw in str(summary or '').replace('\r\n','\n').replace('\r','\n').split('\n'):
+  line=raw.rstrip()
+  stripped=line.strip()
+  if stripped:
+   indent=line[:len(line)-len(line.lstrip())]
+   line=indent+normalize_minute_numbers(stripped)
+  lines.append(line)
+ return '\n'.join(lines)
+
 def expert_minutes_docx(title,summary,participants='',date_text='',experts=None,matrix=None,contents=None):
  from docx import Document
  from docx.shared import Pt,Cm
@@ -39,6 +64,7 @@ def expert_minutes_docx(title,summary,participants='',date_text='',experts=None,
  from io import BytesIO
  doc=Document();section=doc.sections[0];section.page_width=Cm(21);section.page_height=Cm(29.7);section.top_margin=Cm(2.2);section.bottom_margin=Cm(2.2);section.left_margin=Cm(2);section.right_margin=Cm(2)
  normal=doc.styles['Normal'];normal.font.name='Arial';normal.font.size=Pt(10);normal.element.rPr.rFonts.set(qn('w:eastAsia'),'KaiTi')
+ summary=normalize_minute_lines(summary);title=normalize_minute_numbers(title)
  p=doc.add_paragraph();run=p.add_run(title);run.bold=True;run.font.name='Arial';run.font.size=Pt(14);run._element.get_or_add_rPr().rFonts.set(qn('w:eastAsia'),'KaiTi')
  if date_text:doc.add_paragraph(date_text)
  expert_list=experts if isinstance(experts,list) else []
