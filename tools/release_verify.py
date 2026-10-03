@@ -14,6 +14,9 @@ def main():
     env = dict(os.environ)
     configure_saved_env(env)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # Match a normal browser entry: edge browser-integrity rules reject Python's default UA.
+    # These probes remain anonymous and never attach production cookies or credentials.
+    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36')]
     def get(url):
         with opener.open(url, timeout=20) as response:
             return response.status, response.read()
