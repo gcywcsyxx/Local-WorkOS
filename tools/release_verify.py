@@ -36,6 +36,12 @@ def main():
             raise ValueError('The installed contextual AI or archive API is unavailable')
     if b'renderConversation' not in ui or b'execution-record' not in ui or b'renderArchiveReceipt' not in ui:
         raise ValueError('The installed contextual AI or archive UI is unavailable')
+    _, body = get('http://127.0.0.1:18866/api/models')
+    groups = json.loads(body).get('groups', [])
+    if not {'dsh','deepseek','glm','kimi','hunyuan'}.issubset({group.get('id') for group in groups}):
+        raise ValueError('The installed unified model catalog is incomplete')
+    if b'unifiedModelOptions' not in ui or b'data-model-picker' not in ui:
+        raise ValueError('The installed unified model picker is unavailable')
     origin = env.get('WORKOS_PUBLIC_ORIGIN', '').rstrip('/')
     _, body = get('http://127.0.0.1:18866/api/sync/status')
     sync = json.loads(body)
@@ -53,7 +59,7 @@ def main():
         status, body = get(origin + '/auth/login')
         if status != 200 or b'WorkOS' not in body:
             raise ValueError('Public login page unavailable')
-        for route in ('/api/state', '/api/workflows', '/api/health'):
+        for route in ('/api/state', '/api/workflows', '/api/health', '/api/models'):
             try:
                 get(origin + route)
             except urllib.error.HTTPError as exc:

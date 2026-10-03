@@ -40,3 +40,5 @@ Thumbs.db
 workos-release.json
 project-artifacts.json
 project-artifacts/
+model-status.json
+model-status.tmp

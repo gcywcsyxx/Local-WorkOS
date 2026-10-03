@@ -17,6 +17,7 @@ from .store import now
 from .workflows import RECIPES, _selected_documents, _project_context, provider_identity
 from .cancellation import CancellationToken, OperationRegistry, CancelledError, bind_token, check_cancelled
 from .ai_progress import new_execution, add_event, finish_execution, public_execution
+from .model_catalog import resolve_selection, selection_identity
 
 STAGES = [('prepare', '准备资料'), ('generate', '生成正文'), ('check', '检查要求'),
           ('review', '复核内容'), ('repair', '修订问题'), ('save', '保存草稿')]
@@ -181,8 +182,9 @@ class WorkflowJobs:
             raise ValueError('请输入1至12000字的工作要求')
         if body.get('quality_mode', 'fast') not in ('fast', 'thorough'):
             raise ValueError('质量模式无效')
-        if body.get('mode', 'deepseek') not in ('deepseek', 'local-models', 'model', 'dsh'):
-            raise ValueError('请选择可用的AI模型')
+        with self.app.ai_lock:configuration=dict(self.app.ai)
+        selection=resolve_selection(body,configuration,default_mode='deepseek')
+        body={**body,**{key:selection[key] for key in ('mode','provider','model_id')}}
         conversation_id=body.get('conversation_id','')
         if not isinstance(conversation_id,str) or len(conversation_id)>100:
             raise ValueError('对话编号无效')
@@ -196,7 +198,8 @@ class WorkflowJobs:
             if key == 'weekly' and not docs and not context: raise ValueError('项目更新需要已有记录或选定材料')
             # Freeze only the records this recipe reads; no memory is captured.
             snapshot = {'documents': docs, 'projects': project, 'project_context': context}
-            snapshot['provider_identity'] = provider_identity(self.app, body)
+            snapshot['provider_identity'] = selection_identity(selection)
+            snapshot['model_selection']={key:selection[key] for key in ('mode','provider','model_id')}
             if key == 'weekly' and project_id:
                 memory_ids = {doc['id'] for doc in store.list('documents') if doc.get('kind') == 'memory'}
                 records = []
@@ -261,11 +264,12 @@ class WorkflowJobs:
             token.check()
             snapshot = self._capture(workspace, body)
             token.check()
+            canonical={**body,**snapshot['model_selection']}
             job_id = uuid.uuid4().hex
             state = {'id': job_id, 'workflow_key': body.get('workflow_key') or body.get('key'),
                      'project_id': body.get('project_id') or '', 'message': body.get('message') or body.get('question'),
                      'document_ids': [doc['id'] for doc in snapshot['documents']],
-                     'model_id': body.get('model_id') or '', 'mode': body.get('mode') or 'deepseek',
+                     'model_id':canonical['model_id'], 'mode':canonical['mode'],
                      'quality_mode': body.get('quality_mode') or 'fast', 'status': 'queued', 'stage': 'prepare',
                      'conversation_id':body.get('conversation_id') or '', 'revision_of':body.get('revision_of') or '',
                      'attempt':1,
@@ -277,7 +281,7 @@ class WorkflowJobs:
             add_event(state['_execution'],'queued','已进入后台任务队列','queued')
             with self.db:
                 self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',
-                    (job_id, workspace, request_id, fingerprint, encoded, _encoded(snapshot), _encoded(state)))
+                    (job_id, workspace, request_id, fingerprint, _encoded(canonical), _encoded(snapshot), _encoded(state)))
             self.tokens[job_id] = token
             token.pinned = True
             self.executor.submit(self._execute, workspace, job_id)

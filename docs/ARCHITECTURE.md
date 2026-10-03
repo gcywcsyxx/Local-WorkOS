@@ -14,6 +14,8 @@ The UI reads one shared state endpoint rather than keeping separate disconnected
 
 ## Evidence and optional models
 
+One reviewed `model_catalog.py` resolves exact canonical service/model identity for every AI surface. Bootstrap and GET expose the same grouped catalog without network calls. A cancellable POST synthetic JSON probe stores only nonsecret status in runtime `model-status.json`, with endpoint/model identity and24hour expiry; missing runtime wins over cache. Preset keys never inherit credentials configured for a different endpoint. Completion-only bridge entries are visible and disabled. The bridge catalog/echoed IDs do not independently authenticate actual upstream model identity.
+
 PDF text retains actual page boundaries. TXT/Markdown/DOCX use ordinal chunk citations without invented page numbers. Stable chunk IDs and attributed excerpts support a source viewer.
 
 Local retrieval is deterministic lexical matching, not a language model. Irrelevant questions can return no evidence. Both the DSH GPT and compatible routes use explicitly selected documents; memory is rejected before remote calls. DSH uses the existing authenticated CLI with disposable state. Ambient instructions and arbitrary filesystem/shell/web/subagent tools are disabled; the trusted plugin denies all names except four selected-evidence tools in thorough mode (no tools in the plain route). OAuth remains in DSH; custom keys stay in WorkOS memory. See [harness contract](<HARNESS.md>) for completion checks and limits.

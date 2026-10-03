@@ -138,32 +138,15 @@ def _project_context(store, project_id):
 
 
 def _provider_config(app, body):
-    from .server import LOCAL_AI_PRESETS, LOCAL_DEFAULT_MODEL, DSH_MODELS
-    mode = body.get('mode') or body.get('provider') or 'deepseek'
+    from .model_catalog import resolve_selection
     with app.ai_lock: config = dict(app.ai)
-    if mode == 'dsh':
-        model = body.get('model_id') or 'gpt-6-luna'
-        if not isinstance(model, str) or model not in DSH_MODELS:
-            raise ValueError('所选 GPT 模型不在允许列表中')
-        return mode, '', model, config.get('api_key', '')
-    if mode == 'local':
-        raise ValueError('当前是本地摘录模式，不会调用模型；请明确选择 AI 模型后生成工作材料')
-    if mode not in ('deepseek', 'local-models', 'model'):
-        raise ValueError('工作流需要可用模型，请选择 DeepSeek、本机模型或 GPT')
-    if mode == 'model':
-        if not config.get('base_url') or not config.get('model'):
-            raise ValueError('请先配置模型服务；未生成或保存任何草稿')
-        base_url, model = config['base_url'], config['model']
-    else:
-        preset = LOCAL_AI_PRESETS['deepseek' if mode == 'deepseek' else 'local']
-        model = body.get('model_id') or (LOCAL_DEFAULT_MODEL if mode == 'deepseek' else preset['models'][0][0])
-        if not isinstance(model, str) or model not in {item[0] for item in preset['models']}:
-            raise ValueError('所选模型不在允许列表中')
-        base_url = preset['base_url']
-        configured = config.get('base_url') or ''
-        if configured.startswith(('http://127.0.0.1', 'http://localhost')):
-            base_url = configured
-    return mode, base_url, model, config.get('api_key', '')
+    choice = resolve_selection(body, config)
+    # A key configured for another service must never be forwarded to a preset.
+    api_key = ''
+    if choice['mode'] == 'model' or (choice['base_url'] and isinstance(config.get('base_url'),str) and
+            config['base_url'].rstrip('/') == choice['base_url']):
+        api_key = config.get('api_key', '')
+    return choice['mode'], choice['base_url'], choice['model_id'], api_key
 
 
 def provider_identity(app, body):
@@ -172,8 +155,8 @@ def provider_identity(app, body):
     return hashlib.sha256(json.dumps([mode, base_url, model], ensure_ascii=False).encode()).hexdigest()
 
 
-def _model_answer(app, body, system, user):
-    from .server import DSH_MODELS
+def _model_answer(app, body, system, user, *, max_tokens=8000, timeout=95):
+    from .model_catalog import DSH_MODELS
     import hashlib, json
     if hasattr(app, 'completion_meta'): app.completion_meta.finish_reason = None
     mode, base_url, model, api_key = _provider_config(app, body)
@@ -182,7 +165,7 @@ def _model_answer(app, body, system, user):
         raise ValueError('模型服务配置已变更，请重新创建任务；没有自动切换模型')
     if mode == 'dsh':
         return app.dsh_answer(system + '\n\n' + user, model), DSH_MODELS[model][0] + ' via DSH', 'dsh'
-    answer, model_name = app.local_chat(base_url, model, system, user, max_tokens=8000, timeout=95, api_key_snapshot=api_key)
+    answer, model_name = app.local_chat(base_url, model, system, user, max_tokens=max_tokens, timeout=timeout, api_key_snapshot=api_key)
     return answer, model_name, 'model'
 
 
@@ -202,6 +185,9 @@ def run_workflow(app, store, body, progress=None):
     if not isinstance(message, str) or not message.strip() or len(message) > 12000:
         raise ValueError('请输入1至12000字的工作要求')
     project_id, docs = _selected_documents(store, body)
+    # Keep the execution path consistent with inferred legacy model selections.
+    mode, _, model, _ = _provider_config(app, body)
+    body = {**body, 'mode': mode, 'provider': mode, 'model_id': model}
     title, description, kind, required, recipe = RECIPES[key]
     if required and not docs:
         raise ValueError('这项工作需要明确选择研究资料，尚未调用模型')

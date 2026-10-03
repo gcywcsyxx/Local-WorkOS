@@ -1,6 +1,6 @@
 # WorkOS quality harness
 
-Version 1.5.1, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
+Version 1.8.0, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
 
 ## Execution
 
@@ -25,3 +25,7 @@ The local private job DB persists snapshots/checkpoints separately from personal
 Shutdown marks unfinished jobs interrupted before closing the listener; late provider responses cannot save or change checkpoints. A blocked HTTP call may take its bounded timeout to return, but that old worker loses write authority immediately. Unknown submit fields are rejected, including credentials and caller-injected private guard metadata.
 
 Native Excel calculations remain Python/formula-based and require their dedicated numerical validation. Meeting-transcript helper generation and simple research Q&A retain their existing bounded adapters; they do not implicitly perform the material workflow's independent critic cycle. Word/PPT exports are editable presentations of the draft, not a separate factual-validation stage. No automatic mail sending, arbitrary workbook editing, model-weight training or broad quality benchmark is claimed.
+
+## One model selection across work
+
+All AI surfaces resolve the same reviewed service/model pair. GPT uses DSH, while the compatible models keep their exact requested IDs. Agent JSON actions, meeting drafts and valuation assumptions now support either route; changing model within a scoped conversation keeps that scope. No model choice bypasses evidence boundaries, cancellation or deterministic valuation formulas. Plain GPT action/meeting/assumption calls do not gain arbitrary DSH tools. Synthetic JSON probes verify bounded completion for the selected route, not general factual quality or independently authenticated upstream identity.

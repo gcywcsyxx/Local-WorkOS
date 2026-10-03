@@ -83,11 +83,13 @@
   let workflowPollTimer = null;
   const views = new Map();
   function freshView() {
-    return { page: 'overview', startMessage: '', startProject: '', startPurpose: '', startSourceIds: new Set(), startBusy: false, workflowKey: 'brief', workflowMessage: '', workflowBusy: false, workflowError: '', workflowResults: [], projectStage: '全部', projectQuery: '', projectId: '', libraryQuery: '', libraryGroup: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceGroup: '', sourceQuery: '', selectedSources: new Set(), answers: [], researchIntent: 'ask', askMode: 'deepseek', dshModel: loadDshModel(), localModel: loadLocalModel(), agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentResultProject: null, agentProjectScope: true, agentHistoryByScope: new Map(), question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), meetingTranscriptDraft: '', meetingModel: 'deepseek-v4.1-flash', meetingAiBusy: false, meetingSaveTimer: null, meetingSaveState: '', memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '', valuationModel: 'gpt-6-luna' };
+    const ask=loadModelChoice('ask',{mode:loadLocalModel().startsWith('deepseek-')?'deepseek':'local-models',id:loadLocalModel()}),agent=loadModelChoice('agent',{mode:'deepseek',id:'deepseek-v4.1-flash'}),meeting=loadModelChoice('meeting',{mode:'deepseek',id:'deepseek-v4.1-flash'}),valuation=loadModelChoice('valuation',legacyValuationChoice()),start=loadModelChoice('start',{mode:'deepseek',id:'deepseek-v4.1-flash'});
+    return { page: 'overview', startMessage: '', startProject: '', startPurpose: '', startMode:start.mode,startModel:start.id,startSourceIds: new Set(), startBusy: false, workflowKey: 'brief', workflowMessage: '', workflowBusy: false, workflowError: '', workflowResults: [], projectStage: '全部', projectQuery: '', projectId: '', libraryQuery: '', libraryGroup: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceGroup: '', sourceQuery: '', selectedSources: new Set(), answers: [], researchIntent: 'ask', askMode:ask.mode,dshModel:ask.mode==='dsh'?ask.id:loadDshModel(),localModel:ask.mode==='dsh'?loadLocalModel():ask.id,agentMode:agent.mode,agentModel:agent.id,agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentResultProject: null, agentProjectScope: true, agentHistoryByScope: new Map(), question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), meetingTranscriptDraft: '', meetingMode:meeting.mode,meetingModel:meeting.id,meetingAiBusy: false, meetingSaveTimer: null, meetingSaveState: '', memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '',valuationMode:valuation.mode,valuationModel:valuation.id };
   }
   function view() {
     if (!views.has(app.workspace)) {
       const state = freshView();
+      const checker=loadModelChoice('model-check',{mode:'deepseek',id:'deepseek-v4.1-flash'});state['model-checkMode']=checker.mode;state['model-checkModel']=checker.id;
       Object.assign(state, {workflowQuality:'',workflowJobs:[],workflowJobConnectionError:'',workflowPollFailures:0,workflowPollBusy:false,workflowSeenCompletions:new Set(),workflowRetryBusy:new Set(),workflowStopBusy:new Set(),workflowStopErrors:new Map(),aiRuns:new Map(),aiKinds:new Map(),aiReports:new Map(),conversations:new Map(),conversationLists:new Map(),conversationLoading:new Set(),projectArchives:new Map(),archiveLoading:new Set(),meetingInstructions:new Map(),meetingTranscriptDrafts:new Map()});
       views.set(app.workspace, state);
     }
@@ -95,6 +97,8 @@
   }
   function loadDshModel() { try { const model = localStorage.getItem('local-workos:dsh-model'); return DSH_MODEL_IDS.has(model) ? model : 'gpt-6-luna'; } catch { return 'gpt-6-luna'; } }
   function loadLocalModel() { try { const model = localStorage.getItem('local-workos:local-model'); return LOCAL_MODEL_IDS.has(model) ? model : 'deepseek-v4.1-flash'; } catch { return 'deepseek-v4.1-flash'; } }
+  function loadModelChoice(kind,fallback){try{const saved=localStorage.getItem(`local-workos:model-choice:${kind}`),choice=saved?parseModelChoice(saved):fallback;return ['deepseek','local-models','dsh','model','local','rules'].includes(choice.mode)?choice:fallback;}catch{return fallback;}}
+  function legacyValuationChoice(){try{if(localStorage.getItem('local-workos:dsh-model'))return {mode:'dsh',id:loadDshModel()};}catch{/* Optional preference. */}return {mode:'deepseek',id:'deepseek-v4.1-flash'};}
   function loadFinance() {
     try { const value = JSON.parse(localStorage.getItem(`local-workos:${app.workspace}:assumptions`) || 'null'); return { ...FINANCE_DEFAULTS, ...(value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key, number]) => key in FINANCE_DEFAULTS && Number.isFinite(number))) : {}) }; }
     catch { return { ...FINANCE_DEFAULTS }; }
@@ -116,24 +120,31 @@
   const percent = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? `${(Number(value) * 100).toFixed(1)}%` : '不可计算';
   const excerpt = (value, max = 120) => { const text = String(value || '').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; };
   const selectedAttr = (value, expected) => String(value ?? '') === String(expected ?? '') ? ' selected' : '';
-  const localModelOptions = (mode, current) => {
-    const presets = app.boot?.ai?.presets || [];
-    const preset = presets.find(item => item.id === (mode === 'deepseek' ? 'deepseek' : 'local'));
-    const models = preset?.models || [];
-    const fallback = mode === 'deepseek' ? [['deepseek-v4.1-flash', 'DeepSeek V4.1 Flash · 最快最省'], ['deepseek-v4-pro', 'DeepSeek V4 Pro · 重活']] : [['glm-5.2', 'GLM-5.2'], ['kimi-k2.7', 'Kimi K2.7'], ['hy3', 'Hunyuan 3']];
-    const items = models.length ? models.map(item => [item.id, item.name]) : fallback;
-    return items.map(([id, name]) => `<option value="${esc(id)}"${selectedAttr(id, current)}>${esc(name)}</option>`).join('');
-  };
-  const dshModelOptions = current => (app.boot?.dsh?.models || []).map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, current)}>${esc(item.name)}</option>`).join('');
-  function researchModelStatus(state) {
-    if (state.askMode === 'local') return banner('只找原文 · 不调用 AI', '仅在本机按关键词查找原文，不解释或推理。需要简要解释时，请选择 DeepSeek、ChatGPT 或其他模型。', 'amber', 'search');
-    if (state.askMode === 'dsh') return banner('ChatGPT', app.boot?.dsh?.available ? `当前模型：${(app.boot.dsh.models || []).find(item => item.id === state.dshModel)?.name || 'GPT-6 Luna'}。提交后使用已选材料。` : '未检测到模型连接，请到设置连接后重试。', app.boot?.dsh?.available ? 'blue' : 'amber', 'external');
-    const preset = (app.boot?.ai?.presets || []).find(item => item.id === (state.askMode === 'deepseek' ? 'deepseek' : 'local'));
-    const fallback = state.askMode === 'deepseek' ? [{id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash'},{id:'deepseek-v4-pro',name:'DeepSeek V4 Pro'}] : [{id:'glm-5.2',name:'GLM-5.2'},{id:'kimi-k2.7',name:'Kimi K2.7'},{id:'hy3',name:'Hunyuan 3'}];
-    const models = preset?.models?.length ? preset.models : fallback;
-    const model = models.find(item => item.id === state.localModel) || models[0];
-    return banner(state.askMode === 'deepseek' ? 'DeepSeek' : 'GLM / Kimi / 混元', `当前模型：${model?.name || '已选模型'}。连接不可用时会保留你的输入，便于重试。`, 'blue', 'external');
+  function modelGroups(){const catalog=app.boot?.models;return Array.isArray(catalog)?catalog:Array.isArray(catalog?.groups)?catalog.groups:[];}
+  const catalogModels=()=>modelGroups().flatMap(group=>group.models||[]);
+  function parseModelChoice(value){const text=String(value||''),split=text.indexOf(':');return split<0?{mode:text,id:''}:{mode:text.slice(0,split),id:text.slice(split+1)};}
+  function modelSelection(kind,state=view()){if(kind==='ask'||kind==='workflow')return {mode:state.askMode,id:state.askMode==='dsh'?state.dshModel:state.askMode==='local'?'':state.localModel};return {mode:state[`${kind}Mode`]||'deepseek',id:state[`${kind}Model`]||'deepseek-v4.1-flash'};}
+  const modelSelectionId=choice=>`${choice.mode}:${choice.id||''}`;
+  function selectedModel(kind,state=view()){const choice=modelSelection(kind,state);return catalogModels().find(model=>model.selection_id===modelSelectionId(choice)||model.mode===choice.mode&&model.id===choice.id);}
+  function modelAvailable(kind,state=view()){const choice=modelSelection(kind,state);return choice.mode==='local'||choice.mode==='rules'||selectedModel(kind,state)?.available===true;}
+  const modelStatusLabel=status=>({not_checked:'待验证连接',unknown:'待验证连接',advertised:'已发现 · 待验证连接',available:'可用',verified:'已验证',unavailable:'暂不可用',rejected:'连接未通过',runtime_unavailable:'本机连接不可用',unsupported:'当前入口不支持',not_installed:'未安装',missing:'未找到模型',unconfigured:'未配置',failed:'连接未通过',offline:'未连接'}[status]||status||'暂不可用');
+  function unifiedModelOptions(kind,{allowLocal=false,allowRules=false}={}){
+    const selected=modelSelectionId(modelSelection(kind)),models=catalogModels();
+    let html=modelGroups().map(group=>`<optgroup label="${esc(group.label)}">${(group.models||[]).map(model=>`<option value="${esc(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}))}"${selectedAttr(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}),selected)} ${model.available||kind==='model-check'&&['unavailable','rejected'].includes(model.status)?'':'disabled'}>${esc(model.name)}${model.available?['not_checked','unknown','advertised'].includes(model.status)?' · 待验证':'':' · '+esc(model.reason||modelStatusLabel(model.status))}</option>`).join('')}</optgroup>`).join('');
+    const nonAi=[];if(allowLocal)nonAi.push(['local:','仅找原文 · 不调用AI']);if(allowRules)nonAi.push(['rules:','按规则整理 · 不调用AI']);
+    if(nonAi.length)html+=`<optgroup label="本机工具 · 不调用AI">${nonAi.map(([value,label])=>`<option value="${value}"${selectedAttr(value,selected)}>${esc(label)}</option>`).join('')}</optgroup>`;
+    if(!models.some(model=>(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}))===selected)&&!nonAi.some(([value])=>value===selected))html+=`<optgroup label="当前选择"><option value="${esc(selected)}" selected disabled>${esc(modelSelection(kind).id||'选择模型')} · 尚不可用，请选择其他模型</option></optgroup>`;
+    return html;
   }
+  function setModelSelection(kind,value,{persist=true}={}){const state=view(),choice=parseModelChoice(value);if(kind==='ask'||kind==='workflow'){state.askMode=choice.mode;if(choice.mode==='dsh')state.dshModel=choice.id;else if(choice.mode!=='local')state.localModel=choice.id;if(choice.mode!=='local')state.researchAiChoice=modelSelectionId(choice);state.workflowRequest=null;}else{state[`${kind}Mode`]=choice.mode;state[`${kind}Model`]=choice.id;}if(persist)try{localStorage.setItem(`local-workos:model-choice:${kind==='workflow'?'ask':kind}`,modelSelectionId(choice));}catch{/* Optional preference. */}}
+  function restoreResearchModel(){const state=view();setModelSelection('ask',state.researchAiChoice||'deepseek:deepseek-v4.1-flash',{persist:false});}
+  function modelStatus(kind){const choice=modelSelection(kind);if(choice.mode==='local')return banner('只找原文 · 不调用 AI','仅在本机按关键词查找原文，不解释或推理。需要解释时请从同一下拉框选择模型。','amber','search');if(choice.mode==='rules')return banner('按规则整理 · 不调用 AI','仅按本机规则生成可编辑草稿，不调用大模型。','amber','info');const model=selectedModel(kind),available=model?.available===true,status=modelStatusLabel(model?.status);return banner(model?.name||choice.id||'请选择模型',available?`当前连接${['not_checked','unknown'].includes(model.status)?'待验证':'状态：'+status}。提交时使用本次资料和对话范围。`:`${model?.reason||status}。${kind==='model-check'?'可重新检测此模型，或选择其他模型。':'请在下拉框选择其他模型，或到设置检测连接。'}`,available?'blue':'amber',available?'external':'warning');}
+  function requireModel(kind){if(modelAvailable(kind))return true;notify('当前模型不可用，请从下拉框选择可用模型。',true);return false;}
+  function bindModelPickers(root=document){$$('[data-model-picker]',root).forEach(select=>{if(select.dataset.bound)return;select.dataset.bound='true';select.addEventListener('change',()=>{if(select.selectedOptions[0]?.disabled)return;const kind=select.dataset.modelPicker;if(kind==='meeting')captureMeetingDraft();setModelSelection(kind,select.value);if(kind==='model-check')updateModelCatalogRegion();else render();});});}
+  function renderModelCatalog(){const state=view();return `<section class="panel settings-section" id="model-catalog"><h2>统一模型列表</h2><p>各项工作使用同一个分组列表。待验证表示尚未确认连接；刷新列表只读取状态，检测会发送简短的测试请求。</p><div class="row wrap"><select id="model-check-model" class="model-picker" data-model-picker="model-check" aria-label="检测模型" ${state.modelCheckBusy?'disabled':''}>${unifiedModelOptions('model-check')}</select>${actionButton(state.modelCheckBusy?'检测中…':'检测所选模型','models-check','spark','small primary',state.modelCheckBusy?'disabled':'')}${aiStopButton('model-check')}${actionButton('刷新可用性','models-refresh','refresh','small ghost')}</div><div class="mt-12">${modelStatus('model-check')}</div>${aiProgressRegion('model-check')}${state.modelCheckError?`<p class="small error-text">${esc(state.modelCheckError)}</p>`:''}</section>`;}
+  function updateModelCatalogRegion(){const node=$('#model-catalog');if(node){node.outerHTML=renderModelCatalog();bindModelPickers($('#model-catalog'));}updateAiControls();}
+  async function refreshModels(){const response=await api('/models');app.boot.models=response.models||response;updateModelCatalogRegion();notify('模型列表已刷新，未调用模型。');}
+  async function checkSelectedModel(){const state=view();if(state.modelCheckBusy)return;const {mode,id:modelId}=modelSelection('model-check');if(!modelId||['local','rules'].includes(mode))return;const run=beginAiRun('model-check',state);state.modelCheckError='';updateModelCatalogRegion();try{const response=await aiRequest(run,'/models/check',{mode,model_id:modelId});if(response.models)app.boot.models=response.models;notify(response.model?.available?'所选模型连接检测通过。':'所选模型暂不可用，请查看原因。',!response.model?.available);}catch(error){if(error.name!=='AbortError'&&error.name!=='StaleRequestError')state.modelCheckError=error.message;}finally{if(finishAiRun(run)&&view()===state)updateModelCatalogRegion();}}
   const options = (values, selected) => values.map(value => `<option value="${esc(value)}"${selectedAttr(value, selected)}>${esc(value)}</option>`).join('');
   const projectOptions = selected => `<option value="">不关联项目</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}`;
   const projectFilter = (id, selected, label = '全部项目', allowCreate = false, disabled = false) => `<select id="${esc(id)}" class="compact-select" aria-label="${allowCreate?'关联项目':'按项目筛选'}" ${disabled?'disabled':''}><option value="">${esc(label)}</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}${allowCreate?`<option value="${CREATE_PROJECT_VALUE}">＋ 新建项目…</option>`:''}</select>`;
@@ -183,8 +194,8 @@
       throw error;
     } finally { if (method !== 'GET') app.mutations--; }
   }
-  const AI_BUSY = {ask:'asking',agent:'agentBusy',start:'startBusy',valuation:'valuationPending',meeting:'meetingAiBusy','workflow-submit':'workflowBusy'};
-  const AI_LABELS = {ask:'研究问答',agent:'工作区操作',start:'准备工作',valuation:'整理模型假设',meeting:'整理会议','workflow-submit':'登记交付任务'};
+  const AI_BUSY = {ask:'asking',agent:'agentBusy',start:'startBusy',valuation:'valuationPending',meeting:'meetingAiBusy','workflow-submit':'workflowBusy','model-check':'modelCheckBusy'};
+  const AI_LABELS = {ask:'研究问答',agent:'工作区操作',start:'准备工作',valuation:'整理模型假设',meeting:'整理会议','workflow-submit':'登记交付任务','model-check':'检测模型连接'};
   function beginAiRun(kind, state=view(), id=crypto.randomUUID()) {
     const run={kind,id,state,workspace:app.workspace,epoch:app.epoch,controller:new AbortController(),stopped:false,cancelPending:false,cancelError:'',startedAt:Date.now(),progress:null,pollTimer:null,tickTimer:null};
     state.aiRuns.set(id,run);state.aiKinds.set(kind,run);state[AI_BUSY[kind]]=true;
@@ -351,7 +362,7 @@
     clearAiTimers(run);run.progress={...run.progress,status:'cancelled',stage_label:'已停止',elapsed_ms:Date.now()-run.startedAt,eta:null};state.aiReports.set(run.kind,run);
     if(state.aiKinds.get(run.kind)===run){state.aiKinds.delete(run.kind);state[AI_BUSY[run.kind]]=false;}
     if(run.kind==='workflow-submit'&&state.workflowRequest?.id===run.id)state.workflowRequest=null;
-    render();
+    if(run.kind==='model-check'&&app.page==='settings')updateModelCatalogRegion();else render();
     try {
       const response=await api(run.kind==='workflow-submit'?'/workflows/jobs/cancel':`/operations/${encodeURIComponent(run.id)}/cancel`,{body:run.kind==='workflow-submit'?{request_id:run.id}:{}});
       if(view()!==state)return;
@@ -372,7 +383,7 @@
       notify(response.saved||response.job?.status==='completed'?'停止前内容已经保存，已完成的记录保留。':response.status==='completed'?'本次工作在停止前已结束，输入保留。':'已停止，输入和已完成的记录保留。');
     } catch(error) {
       run.cancelError='未能确认服务端停止，请重试。';showError(error);
-    } finally {run.cancelPending=false;if(view()===state){if(!state.aiKinds.size)render();else{updateAiControls();updateWorkflowRegions();}}}
+    } finally {run.cancelPending=false;if(view()===state){if(!state.aiKinds.size){if(run.kind==='model-check'&&app.page==='settings')updateModelCatalogRegion();else render();}else{updateAiControls();updateWorkflowRegions();}}}
   }
   function notify(message, error = false) {
     const element = document.createElement('div'); element.className = `toast${error ? ' error' : ''}`;
@@ -429,7 +440,7 @@
     $('#workspace-switch').innerHTML = `<span class="workspace-icon">${icon(app.workspace === 'personal' ? 'user' : 'briefcase')}</span><span class="workspace-copy">${workspaceName()}<small>${app.workspace === 'personal' ? 'PERSONAL · 仅自己可见' : 'DEMO · 全部为合成数据'}</small></span>${icon('down')}`;
     $('#breadcrumb').innerHTML = `<span>${workspaceName()}</span><span class="slash">/</span><span class="current">${route[1]}</span>`;
     $('#footer-workspace').textContent = `${workspaceName()} · ${app.workspace === 'demo' ? '合成演示数据' : '本地存储'}`;
-    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.7.0';
+    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.8.0';
     updateAiControls();
   }
   function render() {
@@ -609,14 +620,15 @@
     const state = view(); if (state.agentBusy||state.asking||state.workflowBusy) return;
     const message = (typeof messageOverride==='string'?messageOverride:($('#agent-input')?.value||'')).trim(); state.agentMessage = message;
     if (!message) { notify('先说一句你要做什么。', true); return; }
-    const model = $('#agent-model')?.value || state.localModel || 'deepseek-v4.1-flash';
+    if(!requireModel('agent'))return;
+    const {mode,id:model}=modelSelection('agent');
     const projectId = state.agentProjectScope ? (state.researchProject || '') : '';
     const history = state.agentHistoryByScope.get(projectId) || [];
     const run=beginAiRun('agent',state);run.projectId=projectId;state.lastAgentRun=run.id;
     state.agentSteps = []; state.agentAnswer = ''; render();
     try {
       const conversationId=await ensureConversation('agent',run);
-      const result = await aiRequest(run,'/agent',{ message, model_id: model, project_id: projectId, conversation_id:conversationId });
+      const result = await aiRequest(run,'/agent',{ message,mode,provider:mode,model_id: model, project_id: projectId, conversation_id:conversationId });
       acceptConversation(run,result);
       state.agentSteps = Array.isArray(result.steps) ? result.steps : [];
       state.agentAnswer = result.answer || '';
@@ -641,11 +653,12 @@
       const question=plan.question||message, route=plan.route;
       if(route==='finance'||route==='model'){
         if(state.valuationPending){notify('当前模型还在处理，请稍后再准备新的模型。',true);return;}
-        state.valuationText=question;state.valuationProjectId=projectId;state.valuationProposal=null;state.valuationJson='';state.valuationResult=null;state.valuationError='';state.valuationScenarioResult=null;state.valuationScenariosJson='';
+        setModelSelection('valuation',modelSelectionId(modelSelection('start')));state.valuationText=question;state.valuationProjectId=projectId;state.valuationProposal=null;state.valuationJson='';state.valuationResult=null;state.valuationError='';state.valuationScenarioResult=null;state.valuationScenariosJson='';
         state.valuationMethod=/\blbo\b|杠杆收购/i.test(question)?'lbo':/\bdcf\b|现金流折现/i.test(question)?'dcf':/p\s*\/\s*s|市销率/i.test(question)?'ps':'net_income';
         if(await navigate('finance')){assertAiRun(run);notify('已带入建模需求。确认方法和假设后即可计算并保存模型。');}return;
       }
       if(route==='meetings'||route==='meeting'){
+        setModelSelection('meeting',modelSelectionId(modelSelection('start')));
         if(!await navigate('meetings',{projectId}))return;
         assertAiRun(run);
         await editRecord('meetings','',{project_id:projectId,title:'',transcript:''});
@@ -659,10 +672,11 @@
       }
       if(!await navigate('research',{projectId}))return;
       assertAiRun(run);
+      setModelSelection('ask',modelSelectionId(modelSelection('start')));
       state.sourceGroup='';state.sourceQuery='';state.selectedSources=new Set([...state.startSourceIds].filter(id=>{const doc=record('documents',id);return doc&&(!projectId||String(doc.project_id)===String(projectId));}));
       const selected=workflowInfo(plan.workflow_key);
       state.researchIntent=selected?'workflow':'ask';
-      if(selected){state.workflowKey=selected.key;state.workflowQuality='';state.workflowMessage=question;state.workflowError='';if(state.askMode==='local')state.askMode='deepseek';}else state.question=question;
+      if(selected){state.workflowKey=selected.key;state.workflowQuality='';state.workflowMessage=question;state.workflowError='';if(state.askMode==='local')restoreResearchModel();}else state.question=question;
       render();requestAnimationFrame(()=>$('#question-input')?.focus());
       notify(selected?.requires_sources?'已准备工作要求，请选择材料后生成草稿。':'已准备工作要求，确认后生成并保存草稿。');
     }catch(error){showError(error);}
@@ -675,12 +689,12 @@
     if(!message){notify('先描述你要交付的内容。',true);return;}
     const ids=[...state.selectedSources].sort();
     if(recipe.requires_sources&&!ids.length){notify('请先明确选中本次使用的材料。',true);return;}
-    const mode=$('#ask-mode')?.value||state.askMode;
+    const {mode,id:modelId}=modelSelection('workflow');
     if(mode==='local'){notify('交付草稿需要可用模型，请先选择模型；本地检索不会发送资料。',true);return;}
     if(ids.some(id=>record('documents',id)?.kind==='memory')){notify('个人记忆只用于本地检索，请取消记忆材料或切换到问资料。',true);return;}
-    const modelId=mode==='dsh'?($('#dsh-model')?.value||state.dshModel):($('#local-model')?.value||state.localModel);
+    if(!requireModel('workflow'))return;
     const projectId=state.researchProject||'';
-    const payload={workflow_key:recipe.key,message,project_id:projectId,document_ids:ids,mode,model_id:modelId,quality_mode:workflowQuality(state),...(state.workflowRevisionId?{revision_of:state.workflowRevisionId}:{})};
+    const payload={workflow_key:recipe.key,message,project_id:projectId,document_ids:ids,mode,provider:mode,model_id:modelId,quality_mode:workflowQuality(state),...(state.workflowRevisionId?{revision_of:state.workflowRevisionId}:{})};
     const signature=JSON.stringify([payload,ids.map(id=>record('documents',id)?.updated_at||''),record('projects',projectId)?.updated_at||'']);
     if(state.workflowRequest?.signature!==signature)state.workflowRequest={signature,id:crypto.randomUUID()};
     payload.request_id=state.workflowRequest.id;
@@ -701,9 +715,7 @@
   }
   const activeWorkflowJob = job => ['queued','running'].includes(job.status);
   function workflowModelLabel(job) {
-    if(job.mode==='dsh')return (app.boot?.dsh?.models||[]).find(item=>item.id===job.model_id)?.name||'ChatGPT';
-    const models=(app.boot?.ai?.presets||[]).flatMap(item=>item.models||[]);
-    return models.find(item=>item.id===job.model_id)?.name||(job.mode==='deepseek'?'DeepSeek':'所选模型');
+    return catalogModels().find(item=>item.mode===job.mode&&item.id===job.model_id)?.name||job.model_id||'所选模型';
   }
   function jobElapsed(job) {
     const start=Date.parse(job.created_at), finish=activeWorkflowJob(job)?Date.now():Date.parse(job.updated_at);
@@ -858,7 +870,7 @@
   function renderStartWork(){
     const state=view(), busy=state.startBusy||app.uploadBusy;
     const selected=list('documents').filter(doc=>state.startSourceIds.has(String(doc.id))&&String(doc.project_id||'')===String(state.startProject));
-    return `<section class="panel start-work"><h2>今天要完成什么？</h2><p class="small muted">研究、Memo、协议、技术解释、邮件和模型，用一句话开始。</p><form id="start-form"><label for="start-input" class="sr-only">描述工作需求</label><div class="start-input-row"><textarea id="start-input" rows="2" maxlength="8000" aria-describedby="start-keyboard-hint" placeholder="例如：为这个项目写一份投委会 Memo，并列出仍需核实的问题" ${busy?'disabled':''}>${esc(state.startMessage)}</textarea><button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>准备中…':icon('arrow')+'开始工作'}</button>${aiStopButton('start')}</div><p id="start-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p><div class="row wrap start-controls">${projectFilter('start-project',state.startProject,'关联项目（可选）',true,busy)}${actionButton('新建项目','start-create-project','plus','small soft',busy?'disabled':'')}<select id="start-purpose" class="compact-select" aria-label="工作用途" ${busy?'disabled':''}><option value="">自动识别用途</option>${workflowOptions(state.startPurpose)}</select>${actionButton('添加文件','start-upload','upload','small soft',busy?'disabled':'')}${actionButton('添加文件夹','start-folder','upload','small soft',busy?'disabled':'')}</div></form>${aiProgressRegion('start')}<div class="row wrap start-shortcuts" aria-label="常用工作">${['dd','ic','legal','technology','email','expert_request'].filter(key=>workflowInfo(key)).map(key=>actionButton(workflowInfo(key).title,'start-workflow','','small ghost',`data-key="${esc(key)}" ${busy?'disabled':''}`)).join('')}${actionButton('会议整理','start-route','meetings','small ghost',`data-request="整理会议纪要" ${busy?'disabled':''}`)}${actionButton('财务建模','start-route','finance','small ghost',`data-request="建立财务估值模型" ${busy?'disabled':''}`)}${actionButton('整理项目材料','start-route','file','small ghost',`data-request="整理项目材料和版本" ${busy?'disabled':''}`)}</div>${selected.length?`<p class="small muted mt-12">已添加 ${selected.length} 份材料：${selected.map(doc=>esc(doc.title)).join('、')}。开始工作后可核对范围，再生成草稿。</p>`:''}</section>`;
+    return `<section class="panel start-work"><h2>今天要完成什么？</h2><p class="small muted">研究、Memo、协议、技术解释、邮件和模型，用一句话开始。</p><form id="start-form"><label for="start-input" class="sr-only">描述工作需求</label><div class="start-input-row"><textarea id="start-input" rows="2" maxlength="8000" aria-describedby="start-keyboard-hint" placeholder="例如：为这个项目写一份投委会 Memo，并列出仍需核实的问题" ${busy?'disabled':''}>${esc(state.startMessage)}</textarea><button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>准备中…':icon('arrow')+'开始工作'}</button>${aiStopButton('start')}</div><p id="start-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p><div class="row wrap start-controls">${projectFilter('start-project',state.startProject,'关联项目（可选）',true,busy)}${actionButton('新建项目','start-create-project','plus','small soft',busy?'disabled':'')}<select id="start-purpose" class="compact-select" aria-label="工作用途" ${busy?'disabled':''}><option value="">自动识别用途</option>${workflowOptions(state.startPurpose)}</select><select id="start-model" class="model-picker compact-select" data-model-picker="start" aria-label="工作模型" ${busy?'disabled':''}>${unifiedModelOptions('start')}</select>${actionButton('添加文件','start-upload','upload','small soft',busy?'disabled':'')}${actionButton('添加文件夹','start-folder','upload','small soft',busy?'disabled':'')}</div></form>${aiProgressRegion('start')}<div class="row wrap start-shortcuts" aria-label="常用工作">${['dd','ic','legal','technology','email','expert_request'].filter(key=>workflowInfo(key)).map(key=>actionButton(workflowInfo(key).title,'start-workflow','','small ghost',`data-key="${esc(key)}" ${busy?'disabled':''}`)).join('')}${actionButton('会议整理','start-route','meetings','small ghost',`data-request="整理会议纪要" ${busy?'disabled':''}`)}${actionButton('财务建模','start-route','finance','small ghost',`data-request="建立财务估值模型" ${busy?'disabled':''}`)}${actionButton('整理项目材料','start-route','file','small ghost',`data-request="整理项目材料和版本" ${busy?'disabled':''}`)}</div>${selected.length?`<p class="small muted mt-12">已添加 ${selected.length} 份材料：${selected.map(doc=>esc(doc.title)).join('、')}。开始工作后可核对范围，再生成草稿。</p>`:''}</section>`;
   }
   function renderOverview() {
     const recentMeetings=[...list('meetings')].sort((a,b)=>String(b.updated_at).localeCompare(String(a.updated_at))).slice(0,3);
@@ -932,7 +944,6 @@
   function renderResearch() {
     const state = view(); const sources = filteredSources();
     const selected = list('documents').filter(doc => state.selectedSources.has(String(doc.id)));
-    const dshAvailable = Boolean(app.boot?.dsh?.available);
     const notes = list('notes').filter(note => !state.researchProject || String(note.project_id) === state.researchProject);
     const memorySelected = selected.some(doc => doc.kind === 'memory');
     const actionMode=state.researchIntent==='actions', workflowMode=state.researchIntent==='workflow', busy=state.asking||state.agentBusy||state.workflowBusy;
@@ -945,11 +956,11 @@
       <div class="research-layout"><section class="panel source-panel">${panelTitle('证据材料', 'file', `<span class="count-pill">${sources.length}</span>`)}<div class="panel-body" style="padding:0 16px 13px">${searchInput('source-search', '搜索材料标题', state.sourceQuery)}</div><div class="sources-toolbar"><label><input type="checkbox" id="source-select-all" ${sources.length && sources.every(doc => state.selectedSources.has(String(doc.id))) ? 'checked' : ''} ${!sources.length ? 'disabled' : ''}>选中筛选结果</label><span>已选 ${selected.length} 份</span></div><div class="source-list">${sources.length ? sources.map(doc => `<div class="source-row${state.selectedSources.has(String(doc.id)) ? ' selected' : ''}"><input type="checkbox" data-source-id="${esc(doc.id)}" aria-label="选择材料：${esc(doc.title)}" ${state.selectedSources.has(String(doc.id)) ? 'checked' : ''}><div class="source-info"><button type="button" class="source-name" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><div class="source-meta"><span>${doc.kind === 'memory' ? '记忆 · 仅本地' : esc(doc.material_type || doc.category || '研究材料')}${doc.task_group ? ' · ' + esc(doc.task_group) : ''}${doc.version_label ? ' · ' + esc(doc.version_label) : ''}</span><span>${doc.page_count ? `${esc(doc.page_count)} 页` : esc(doc.filename?.split('.').pop()?.toUpperCase() || '纯文本')}</span></div></div></div>`).join('') : empty('file', '还没有证据材料', '导入 TXT / MD / PDF / DOCX，或直接粘贴原文。扫描 PDF 暂不支持 OCR。', '', true)}</div><div class="source-footer">${actionButton('粘贴导入', 'paste-import', 'plus', 'small', app.uploadBusy ? 'disabled' : '')}${actionButton('导入文件', 'upload', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}${actionButton('导入文件夹', 'upload-folder', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}</div></section>
       <div class="stack"><section class="panel question-panel"><div class="question-heading"><span class="question-icon">${icon('research')}</span><div><h2>研究助理</h2><small>模型简要解释选定资料，保留原文引用；仅查阅时不改记录。</small></div></div><div class="composer-mode"><label for="research-intent">用途</label><select id="research-intent" aria-label="AI任务类型" ${busy ? 'disabled' : ''}><option value="ask"${selectedAttr('ask',state.researchIntent)}>问资料 · 不改记录</option><option value="workflow"${selectedAttr('workflow',state.researchIntent)}>生成交付草稿</option><option value="actions"${selectedAttr('actions',state.researchIntent)}>操作工作区 · 创建/保存记录</option></select>${workflowMode?`<select id="workflow-purpose" aria-label="交付用途" ${busy?'disabled':''}>${workflowOptions(state.workflowKey)}</select><select id="workflow-quality" aria-label="整理深度" ${busy?'disabled':''}><option value="thorough"${selectedAttr('thorough',workflowQuality(state))}>深入整理 · 分析、复核、修订</option><option value="fast"${selectedAttr('fast',workflowQuality(state))}>快速草稿</option></select>`:''}</div>${workflowMode?`<p class="small muted">${esc(activeWorkflow?.description||'描述你要完成的交付，再确认使用的材料。')}</p>${state.workflowError?`<div class="mt-12">${banner('草稿未生成',state.workflowError,'error','warning')}</div>`:''}`:`<div class="row wrap mt-12" aria-label="常用研究任务"><button type="button" class="button small soft" data-action="research-template" data-template="brief">项目速览</button><button type="button" class="button small soft" data-action="research-template" data-template="gaps">尽调缺口</button><button type="button" class="button small soft" data-action="research-template" data-template="compare">口径差异</button></div>`}${renderConversation(actionMode?'agent':workflowMode?'workflow':'ask')}<form id="ask-form"><div class="question-box"><label for="question-input" class="sr-only">研究问题</label><textarea id="question-input" name="question" required maxlength="${actionMode||workflowMode?8000:4000}" aria-describedby="research-keyboard-hint" placeholder="${actionMode?'例如：把我输入的访谈文字保存成资料，并创建三条待核实任务。':workflowMode?'描述交付要求、对象、结构，以及希望重点解决的问题。':'例如：收入增长的主要驱动是什么？这些资料有哪些矛盾或缺口？'}" ${busy ? 'disabled' : ''}>${esc(actionMode?state.agentMessage:workflowMode?state.workflowMessage:state.question)}</textarea>
       <div class="question-bottom">
-      ${actionMode ? `<select id="agent-model" aria-label="操作助手模型" ${busy?'disabled':''}>${localModelOptions('deepseek',state.localModel)}</select><label class="agent-toggle"><input type="checkbox" id="agent-project-scope" ${state.researchProject && state.agentProjectScope?'checked':''} ${state.researchProject ? '' : 'disabled'}>关联当前公司</label>` :
-      `<select id="ask-mode" aria-label="回答引擎" ${busy?'disabled':''}><option value="deepseek"${selectedAttr('deepseek',state.askMode)}>DeepSeek · 快</option>${workflowMode?'':`<option value="local"${selectedAttr('local',state.askMode)}>仅找原文 · 不调用AI</option>`}<option value="local-models"${selectedAttr('local-models',state.askMode)}>GLM / Kimi / 混元</option><option value="dsh" ${!dshAvailable?'disabled':''}${selectedAttr('dsh',state.askMode)}>ChatGPT</option></select>${state.askMode==='dsh'?'<select id="dsh-model" aria-label="GPT模型">'+dshModelOptions(state.dshModel)+'</select>':''}${(state.askMode==='deepseek'||state.askMode==='local-models')?'<select id="local-model" aria-label="本机模型">'+localModelOptions(state.askMode,state.localModel)+'</select>':''}`}
-      <button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>正在处理…':icon('arrow')+(actionMode?'执行工作区操作':workflowMode?'生成并保存草稿':'查阅选定材料')}</button>${busy?aiStopButton(state.asking?'ask':state.agentBusy?'agent':'workflow-submit'):''}</div><p id="research-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p></div>
+      ${actionMode ? `<select id="agent-model" class="model-picker" data-model-picker="agent" aria-label="操作助手模型" ${busy?'disabled':''}>${unifiedModelOptions('agent')}</select><label class="agent-toggle"><input type="checkbox" id="agent-project-scope" ${state.researchProject && state.agentProjectScope?'checked':''} ${state.researchProject ? '' : 'disabled'}>关联当前公司</label>` :
+      `<select id="ask-mode" class="model-picker" data-model-picker="ask" aria-label="研究模型" ${busy?'disabled':''}>${unifiedModelOptions('ask',{allowLocal:!workflowMode})}</select>`}
+      <button type="submit" class="button primary" ${busy||!modelAvailable(actionMode?'agent':'ask')?'disabled':''}>${busy?'<span class="spinner"></span>正在处理…':icon('arrow')+(actionMode?'执行工作区操作':workflowMode?'生成并保存草稿':'查阅选定材料')}</button>${busy?aiStopButton(state.asking?'ask':state.agentBusy?'agent':'workflow-submit'):''}</div><p id="research-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p></div>
       ${actionMode?`<div class="source-scope">操作范围：${esc(state.researchProject && state.agentProjectScope?projectName(state.researchProject):'工作区')}。选中资料正文不会自动随操作请求发送；分析资料请切回“问资料”。</div>`:`<div class="source-scope"><span>本次范围：</span>${selected.length ? selected.map(doc => `<span class="tag ${doc.kind === 'memory' ? 'amber' : 'green'}">${esc(doc.title)}</span>`).join('') : workflowMode&&!activeWorkflow?.requires_sources?'<span>可直接填写工作要求；选定材料时会显示在这里。</span>':'<span>请先在左侧明确选择材料，不会默认检索或发送全库。</span>'}</div>`}
-      ${!actionMode ? `<div class="mt-12">${researchModelStatus(state)}</div>${memorySelected && state.askMode !== 'local' ? `<div class="mt-12">${banner('', '选中范围含个人记忆。记忆只做本地检索；请切换“仅找原文”，或取消记忆来源。', 'amber', 'lock')}</div>` : ''}<p class="inline-note">${workflowMode?'确认后生成并保存草稿，使用左侧已勾选材料或本次工作要求。':state.askMode==='local'?'仅在本机查找左侧勾选材料中的原文。':'使用所选模型简要解释左侧勾选资料。'}不发送未选资料与个人记忆。</p>` : ''}</form>${aiProgressRegion(actionMode?'agent':workflowMode?'workflow-submit':'ask')}</section>
+      <div class="mt-12">${modelStatus(actionMode?'agent':'ask')}</div>${!actionMode ? `${memorySelected && state.askMode !== 'local' ? `<div class="mt-12">${banner('', '选中范围含个人记忆。记忆只做本地检索；请切换“仅找原文”，或取消记忆来源。', 'amber', 'lock')}</div>` : ''}<p class="inline-note">${workflowMode?'确认后生成并保存草稿，使用左侧已勾选材料或本次工作要求。':state.askMode==='local'?'仅在本机查找左侧勾选材料中的原文。':'使用所选模型简要解释左侧勾选资料。'}不发送未选资料与个人记忆。</p>` : ''}</form>${aiProgressRegion(actionMode?'agent':workflowMode?'workflow-submit':'ask')}</section>
       ${renderAgentResult()}
       <div id="workflow-jobs" class="workflow-jobs" aria-live="polite">${renderWorkflowJobs()}</div><div id="workflow-results" class="workflow-results">${visibleWorkflowResults.map(({result,index})=>renderWorkflowResult(result,index)).join('')}</div>
       ${visibleAnswers.length ? visibleAnswers.map(({answer,index})=>renderAnswer(answer,index)).join('') : `<section class="panel">${empty('quote', '从有出处的回答开始', '选中资料并提问，让所选模型简要解释；点击引用可查看原文。资料不足时说明缺口，一般解释与公司事实分开。', '', true)}</section>`}
@@ -969,13 +980,11 @@
     if (!question) { notify('请先输入一个研究问题。', true); return; }
     const ids = [...state.selectedSources];
     if (!ids.length) { notify('请先明确选中至少一份资料。', true); return; }
-    const mode = $('#ask-mode').value;
+    const {mode,id:modelId}=modelSelection('ask');
     const allowExternal = mode !== 'local'; // Selection itself is the scope; no per-request consent gate.
-    const modelId = mode === 'dsh' ? ($('#dsh-model')?.value || state.dshModel || 'gpt-6-luna') : (mode === 'deepseek' || mode === 'local-models') ? ($('#local-model')?.value || state.localModel || 'deepseek-v4.1-flash') : '';
     if (mode !== 'local') {
       if (ids.some(id => record('documents', id)?.kind === 'memory')) { notify('个人记忆只做本地检索：请改用“仅找原文”，或取消记忆来源。', true); return; }
-      if (mode === 'dsh' && !app.boot?.dsh?.available) { notify('没有检测到本机 DSH，请检查 DSH 安装。', true); return; }
-      if (mode === 'model' && !app.boot?.ai?.configured) { notify('请先在设置中配置可选模型。', true); return; }
+      if(!requireModel('ask'))return;
     }
     const projectId = state.researchProject || '';
     if(mode==='local'){
@@ -987,7 +996,7 @@
     const run=beginAiRun('ask',state);render();
     try {
       const conversationId=mode==='local'?'':await ensureConversation('ask',run);
-      const response = await aiRequest(run,'/ask',{ question, project_id: projectId, document_ids: ids, mode, model_id: modelId, allow_external: allowExternal,...(conversationId?{conversation_id:conversationId}:{}) });
+      const response = await aiRequest(run,'/ask',{ question, project_id: projectId, document_ids: ids, mode,provider:mode,model_id: modelId, allow_external: allowExternal,...(conversationId?{conversation_id:conversationId}:{}) });
       acceptConversation(run,response);
       state.answers.unshift({ ...response, question, project_id: projectId,document_ids:ids }); state.answers = state.answers.slice(0, 8);
     } catch (error) { showError(error); }
@@ -1109,9 +1118,8 @@
   const formatMinuteText = text => String(text || '').replace(/(^|\n)([•\-])\s*/g, '$1• ').replace(/(^|\n)o\s+/g, '$1o ').replace(/(^|\n)[➢➤]\s*/g, '$1➢ ').replace(/([\d])\s*[–—]\s*([\d])/g, '$1-$2');
   function renderMeetings() {
     const state = view(); const { meetings, meeting } = meetingSelection();
-    const localModels=localModelOptions('deepseek',state.meetingModel||state.localModel||'deepseek-v4.1-flash');
-    const modeLabel='DeepSeek Flash (V4.1)';
-    return heading('会议纪要', 'EXPERT CALL NOTES', '粘贴原文，'+modeLabel+' 自动整理成册，编辑后直接导出 Word / PDF。', actionButton('新建会议', 'create', 'plus', 'primary', 'data-collection="meetings"')) +
+    const localModels=unifiedModelOptions('meeting',{allowRules:true});
+    return heading('会议纪要', 'EXPERT CALL NOTES', '粘贴原文，选择模型整理纪要，编辑后直接导出 Word / PDF。', actionButton('新建会议', 'create', 'plus', 'primary', 'data-collection="meetings"')) +
       `<div class="toolbar"><div class="toolbar-group">${projectFilter('meeting-project', state.meetingProject)}<span class="small muted">${meetings.length} 场会议</span></div></div>
       <div class="split-layout"><section class="panel">${panelTitle('会议记录', 'meetings')}<div class="record-list">${meetings.length ? meetings.map(item => `<button type="button" class="record-item${String(item.id) === String(state.meetingId) ? ' active' : ''}" data-action="select-meeting" data-id="${esc(item.id)}"><h3>${esc(item.title)}</h3><p>${esc(projectName(item.project_id))}</p><span class="record-date">${esc(item.date || '日期待补充')} · ${esc(item.participants || '参会人待补充')}</span></button>`).join('') : empty('meetings', '尚无会议记录', '粘贴逐字稿即可开始。', '', true)}</div></section>
       <div>${meeting ? renderMeetingDetail(meeting, {localModels, actionButton, iconButton, banner, esc, projectName, list}) : `<section class="panel">${empty('meetings', '让会议形成可跟进的行动', '新建会议并粘贴逐字稿。规则引擎生成的是可编辑草稿，不会自动创建任务或作出承诺。', actionButton('记录第一场会议', 'create', 'plus', 'primary', 'data-collection="meetings"'))}</section>`}</div></div>`;
@@ -1122,10 +1130,10 @@
     const header = '<section class="panel"><div class="meeting-header"><div><h2>' + h.esc(meeting.title) + '</h2><div class="meeting-meta">' + h.esc(meeting.date || '日期待补充') + ' · ' + h.esc(h.projectName(meeting.project_id)) + ' · ' + h.esc(meeting.participants || '') + '</div></div>' + h.iconButton('编辑会议与逐字稿','edit','edit','data-collection="meetings" data-id="' + h.esc(meeting.id) + '"') + h.iconButton('删除会议','delete','trash','data-collection="meetings" data-id="' + h.esc(meeting.id) + '"','danger') + '</div><div class="meeting-body">';
     const transcript = '<details class="transcript-details"' + (meeting.transcript ? '' : ' open') + '><summary>逐字稿 · ' + String((meeting.transcript || '').length) + ' 字</summary><div class="transcript-text">' + h.esc(meeting.transcript || '尚未粘贴逐字稿。可直接 Ctrl+V 粘贴。') + '</div></details>';
     const warnings = draft?.warnings?.length ? h.banner('AI 整理说明', draft.warnings.join('；'), 'amber', 'info') : '';
-    const intake = '<div class="field mt-18"><label for="meeting-transcript-input">原文转写 · 粘贴或拖入 TXT / DOCX / PDF</label><div class="meeting-transcript-drop" data-meeting-transcript-drop="true"><textarea id="meeting-transcript-input" rows="7" placeholder="Ctrl+V 粘贴逐字稿；也可把 TXT / DOCX / PDF 拖到此区域。原文会自动保存。">' + h.esc(state.meetingTranscriptDraft || meeting.transcript || '') + '</textarea></div><div class="row wrap mt-12"><select id="meeting-model">' + h.localModels + '</select>' + h.actionButton(state.meetingAiBusy ? '正在整理…' : summary ? '按要求修订并保存纪要' : '一键整理并保存纪要','meeting-ai-draft','spark','primary','data-id="' + h.esc(meeting.id) + '" ' + (state.meetingAiBusy ? 'disabled' : '')) + aiStopButton('meeting') + '</div></div>';
+    const intake = '<div class="field mt-18"><label for="meeting-transcript-input">原文转写 · 粘贴或拖入 TXT / DOCX / PDF</label><div class="meeting-transcript-drop" data-meeting-transcript-drop="true"><textarea id="meeting-transcript-input" rows="7" placeholder="Ctrl+V 粘贴逐字稿；也可把 TXT / DOCX / PDF 拖到此区域。原文会自动保存。">' + h.esc(state.meetingTranscriptDraft || meeting.transcript || '') + '</textarea></div><div class="row wrap mt-12"><select id="meeting-model" class="model-picker" data-model-picker="meeting" aria-label="纪要整理模型" ' + (state.meetingAiBusy ? 'disabled' : '') + '>' + h.localModels + '</select>' + h.actionButton(state.meetingAiBusy ? '正在整理…' : summary ? '按要求修订并保存纪要' : '一键整理并保存纪要','meeting-ai-draft','spark','primary','data-id="' + h.esc(meeting.id) + '" ' + (state.meetingAiBusy || !modelAvailable('meeting') ? 'disabled' : '')) + aiStopButton('meeting') + '</div></div>';
     const form = '<form id="meeting-summary-form" data-id="' + h.esc(meeting.id) + '"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="生成后可直接编辑；自动保存。">' + h.esc(summary) + '</textarea></div><div class="row wrap"><span class="tiny muted" id="meeting-save-state">' + h.esc(state.meetingSaveState || '本机自动保存；项目文件归档状态见项目详情') + '</span><span class="spacer"></span>' + h.actionButton('Word','meeting-export','download','small soft','data-id="' + h.esc(meeting.id) + '" data-format="docx"') + h.actionButton('PDF','meeting-export','download','small primary','data-id="' + h.esc(meeting.id) + '" data-format="pdf"') + '</div></form>';
     const tasks = relatedTasks.length ? '<div class="subsection-title"><h3>已识别行动 (' + relatedTasks.length + ')</h3></div>' + relatedTasks.map(task => '<div class="task-line"><span class="tag ' + (task.status === '完成' ? 'green' : 'blue') + '">' + h.esc(task.status) + '</span><span class="task-title">' + h.esc(task.title) + '</span></div>').join('') : '';
-    return header + transcript + intake + renderConversation('meeting') + '<div class="field mt-12"><label for="meeting-revision-input">补充要求 / 继续修订</label><textarea id="meeting-revision-input" rows="2" maxlength="8000" placeholder="例如：保留专家原话，补充一个待核实问题表。Enter 发送，Shift+Enter 换行。">' + esc(state.meetingInstructions.get(String(meeting.id))||'') + '</textarea></div>' + aiProgressRegion('meeting') + warnings + form + renderArchiveReceipt(state.meetingArchive) + tasks + '</div></section>';
+    return header + transcript + intake + '<div class="mt-12">' + modelStatus('meeting') + '</div>' + (state.meetingMode==='rules'?'':renderConversation('meeting')) + '<div class="field mt-12"><label for="meeting-revision-input">补充要求 / 继续修订</label><textarea id="meeting-revision-input" rows="2" maxlength="8000" placeholder="例如：保留专家原话，补充一个待核实问题表。Enter 发送，Shift+Enter 换行。">' + esc(state.meetingInstructions.get(String(meeting.id))||'') + '</textarea></div>' + (state.meetingMode==='rules'?'':aiProgressRegion('meeting')) + warnings + form + renderArchiveReceipt(state.meetingArchive) + tasks + '</div></section>';
   }
 
   async function generateExpertNotes(id,button){
@@ -1133,6 +1141,12 @@
     const meeting=record('meetings',id);if(!meeting)return;
     const transcript=(view().meetingTranscriptDraft||'').trim()||String(meeting.transcript||'').trim();
     if(!transcript){notify('先粘贴或拖入逐字稿。',true);return;}
+    if(!requireModel('meeting'))return;
+    const {mode,id:modelId}=modelSelection('meeting');
+    if(mode==='rules')return withBusy(button,'正在按规则整理…',async()=>{
+      captureMeetingDraft();state.meetingAiBusy=true;
+      try{clearTimeout(state.transcriptSaveTimer);if(transcript!==String(meeting.transcript||''))await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript}});const result=await api('/meeting-draft',{body:{provider:'rules',mode:'local',transcript,title:meeting.title,project_id:meeting.project_id||'',save_meeting_id:String(id)}});if(!result.saved)throw new Error('规则草稿尚未确认保存，请重新查询会议记录。');state.drafts.set(String(id),{...result,summary:formatMinuteText(result.summary||'')});state.meetingArchive=result.archive;await refreshData();notify('已按本机规则整理并保存，未调用 AI。');}finally{state.meetingAiBusy=false;if(view()===state)render();}
+    });
     await withBusy(button,'正在整理并保存…',async()=>{
       captureMeetingDraft();const run=beginAiRun('meeting',state);state.lastMeetingRun=run.id;run.summaryBefore=state.drafts.get(String(id))?.summary??meeting.summary??'';render();
       try{
@@ -1140,7 +1154,7 @@
         if(transcript!==String(meeting.transcript||''))await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript}});
         assertAiRun(run);
         const conversationId=await ensureConversation('meeting',run);
-        const result=await aiRequest(run,'/meeting-draft',{provider:'deepseek',model_id:state.meetingModel||state.localModel||'deepseek-v4.1-flash',transcript,title:meeting.title,date:meeting.date,participants:meeting.participants,project_id:meeting.project_id||'',save_meeting_id:String(id),conversation_id:conversationId,revision_instructions:state.meetingInstructions.get(String(id))||''});
+        const result=await aiRequest(run,'/meeting-draft',{mode,provider:mode,model_id:modelId,transcript,title:meeting.title,date:meeting.date,participants:meeting.participants,project_id:meeting.project_id||'',save_meeting_id:String(id),conversation_id:conversationId,revision_instructions:state.meetingInstructions.get(String(id))||''});
         acceptConversation(run,result);
         state.meetingArchive=result.archive;
         if(!result.saved)throw new Error('纪要尚未确认保存，请重新查询会议记录。');
@@ -1231,7 +1245,7 @@
   }
 
   function renderFinance() {
-    return window.LocalWorkOSValuation.render({ state: view(), boot: app.boot, helpers: { heading, actionButton, aiStopButton, aiProgressRegion, renderConversation, renderArchiveReceipt, icon, banner, empty, esc, projectOptions, selectedAttr, dshModelOptions, number, percent } });
+    return window.LocalWorkOSValuation.render({ state: view(), boot: app.boot, helpers: { heading, actionButton, aiStopButton, aiProgressRegion, renderConversation, renderArchiveReceipt, icon, banner, empty, esc, projectOptions, selectedAttr, unifiedModelOptions,modelStatus,modelAvailable,number, percent } });
     const state = view(); const result = state.financeResult;
     return heading('回报测算', 'ASSUMPTIONS, NOT PROMISES', '所有数字由本地代码计算。展示假设、公式与边界，不让模型代算。', actionButton('保存测算简报', 'finance-deliverable', 'deliverables', '', !result || state.financeDirty ? 'disabled title="请先用当前假设完成测算"' : '')) +
       `<div class="section-gap">${banner('简化权益回报模型 · 非完整 LBO', '单位：人民币百万元。不包含税务、营运资本明细、交易费用及完整债务契约；情景和敏感性不是收益承诺。现金流、IRR / MOIC 的定义请查看下方公式。', 'amber', 'info')}</div>
@@ -1267,11 +1281,13 @@
     const state = view(); if (state.valuationPending) return;
     const text = $('#valuation-text')?.value.trim() || ''; state.valuationText = text;
     if (!text) { notify('请先用自然语言描述交易和主要假设。', true); return; }
+    if(!requireModel('valuation'))return;
+    const {mode,id:modelId}=modelSelection('valuation');
     const run=beginAiRun('valuation',state);state.valuationError = ''; state.valuationResult = null; render();
     try {
       const conversationId=await ensureConversation('valuation',run);
       let priorAssumptions;try{priorAssumptions=JSON.parse(state.valuationJson||'{}');}catch{throw new Error('当前假设 JSON 格式不正确，请先修正后继续。');}
-      const result = await aiRequest(run,'/model/parse-assumptions',{ method: state.valuationMethod, text, model_id: state.valuationModel || 'gpt-6-luna', allow_external: true,project_id:state.valuationProjectId||'',conversation_id:conversationId,...(state.valuationJson.trim()?{prior_assumptions:priorAssumptions}:{}) });
+      const result = await aiRequest(run,'/model/parse-assumptions',{ method: state.valuationMethod, text,mode,provider:mode,model_id:modelId,allow_external: true,project_id:state.valuationProjectId||'',conversation_id:conversationId,...(state.valuationJson.trim()?{prior_assumptions:priorAssumptions}:{}) });
       acceptConversation(run,result);
       if(conversationScope('valuation').key===run.conversationScope.key){state.valuationProposal = result; state.valuationJson = JSON.stringify(result.assumptions || {}, null, 2);}
     } catch (error) { if (state.aiKinds.get('valuation')===run&&error.name !== 'StaleRequestError'&&error.name!=='AbortError') state.valuationError = error.message; }
@@ -1395,8 +1411,8 @@
     const ai = app.boot?.ai || {}; const sync = app.boot?.sync || {}; const personalSync = sync.workspaces?.personal || {};
     return heading('设置与连接', 'LOCAL BY DEFAULT', '工作区、可选模型与数据安全，在这里保持透明。') +
       `<div class="settings-grid"><div class="stack"><section class="panel settings-section"><h2>你的工作区</h2><p>默认打开个人空间。演示仅包含合成记录；两套本地数据库完全隔离。</p><div class="mode-options">${[['personal', '个人工作区', '我的项目、资料与稳定记忆', 'user'], ['demo', '演示工作区', '合成示例，可安全体验完整流程', 'briefcase']].map(([mode, title, text, symbol]) => `<button type="button" class="mode-card${app.workspace === mode ? ' active' : ''}" data-action="workspace" data-workspace="${mode}" aria-pressed="${app.workspace === mode}">${icon(symbol)}<strong>${title}${app.workspace === mode ? ' · 当前' : ''}</strong><small>${text}</small></button>`).join('')}</div></section>
-      <section class="panel settings-section"><h2>GPT / DSH 模型</h2><p>研究页默认使用 DeepSeek，也可通过本机 DSH 调用 ChatGPT；OAuth 凭据留在 DSH。选择“仅找原文”时明确不调用大模型。</p><div class="model-state"><span class="status-dot"></span>${app.boot?.dsh?.available ? `DSH 已接入 · 默认 ${esc((app.boot.dsh.models || []).find(item => item.id === app.boot.dsh.model)?.name || "GPT-6 Luna")}` : "未检测到 DSH；仍可使用本地检索或其他兼容模型。"}</div><p>研究页显示本次资料范围；提交问题时仅发送已勾选的证据片段，个人记忆只做本地检索。</p><h3>其他兼容模型（可选）</h3><p>兼容 OpenAI Chat Completions。此配置仅在本次 WorkOS 服务进程内存，不保存密钥；连接需要由你自行配置。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '未配置外部模型 · 当前离线工作'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('按你选定的资料范围回答', '提交问题时，仅选中的非记忆资料可外发。个人记忆始终只用于本地检索。', 'amber', 'shield')}</div></section></div>
-      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.3')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}${app.boot?.auth?.public_login ? actionButton('退出公网登录', 'logout-public', 'lock', 'small soft') : ''}</div></section>
+      ${renderModelCatalog()}<section class="panel settings-section"><h2>模型连接配置</h2><p>各项 AI 工作共用分组模型列表。GPT 通过本机 DSH 调用，OAuth 凭据留在 DSH；选择“仅找原文”时不调用大模型。</p><div class="model-state"><span class="status-dot"></span>${app.boot?.dsh?.available ? `DSH 已接入 · 默认 ${esc((app.boot.dsh.models || []).find(item => item.id === app.boot.dsh.model)?.name || "GPT-6 Luna")}` : "未检测到 DSH；仍可使用本地检索或其他兼容模型。"}</div><p>研究页显示本次资料范围；提交问题时仅发送已勾选的证据片段，个人记忆只做本地检索。</p><h3>自定义兼容模型（选填）</h3><p>兼容 OpenAI Chat Completions。此配置仅在本次 WorkOS 服务进程内存，不保存密钥；连接需要由你自行配置。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '尚未配置自定义连接；可使用列表中的其他模型'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('按你选定的资料范围回答', '提交问题时，仅选中的非记忆资料可外发。个人记忆始终只用于本地检索。', 'amber', 'shield')}</div></section></div>
+      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.8.0')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}${app.boot?.auth?.public_login ? actionButton('退出公网登录', 'logout-public', 'lock', 'small soft') : ''}</div></section>
       ${renderArchiveConfig()}<section class="panel settings-section"><h2>OneDrive 项目文件同步</h2><p>主机是唯一写入端；项目元数据、已导入资料文本、原文件、会议/研究/交付记录和 JSON 快照会在保存时镜像到 OneDrive 的 AI Agent/Local WorkOS。活动中的 SQLite/WAL 保留在本机，避免 OneDrive 文件锁与并发同步损坏；其他设备可经远程入口使用同一主机。</p><div class="model-state"><span class="status-dot"></span>${sync.enabled ? (sync.error ? esc(sync.error) : '已配置 · ' + Number(personalSync.counts?.projects || 0) + ' 个项目 · ' + Number(personalSync.counts?.documents || 0) + ' 份资料') : '未配置 OneDrive 同步根目录'}</div><div class="mt-18">${actionButton('立即同步', 'sync-onedrive', 'refresh', 'small', !sync.enabled ? 'disabled' : '')}</div><p class="inline-note mt-12">OneDrive 镜像包含原文件；旧记录若未保存原文件，需要重新导入后才能下载。${Number(sync.missing_originals_by_workspace?.[app.workspace] || 0) ? '当前有 ' + Number(personalSync.missing_originals) + ' 份原文件缺失，请重新导入。' : ''}不要手动替换活动中的 .sqlite3/WAL 文件。</p></section>
 
       <section class="panel settings-section"><h2>数据备份与恢复</h2><p>导出当前工作区的 JSON 备份，不包含 API Key。备份包含记录、解析文本与记忆副本，不包含原文件的二进制内容。请同时保留本机附件目录或 OneDrive 原文件镜像。</p><div class="row wrap">${actionButton('导出当前备份', 'backup', 'download', 'soft')}${actionButton('选择备份恢复', 'restore', 'upload')}</div><p class="inline-note mt-18">恢复前校验格式、关联和大小；服务端先备份现有数据库，再事务替换当前工作区。不跨工作区恢复。</p></section>
@@ -1409,7 +1425,7 @@
     $('#ai-api-key').value = '';
     await withBusy($('button[type="submit"]', form), '正在保存到进程内存…', async () => {
       const result = await api('/ai/settings', { body: payload }); payload.api_key = '';
-      app.boot.ai = result.ai || result; render(); notify('连接配置已保存到服务器内存，未测试网络、未发送资料。');
+      app.boot.ai = result.ai || result;const catalog=await api('/models');app.boot.models=catalog.models||catalog;render();notify('连接配置已保存到服务器内存，未测试网络、未发送资料。');
     });
     payload.api_key = '';
   }
@@ -1515,12 +1531,9 @@
     bindSubmit('start-form',startWork);
     bindAiComposer('start-input','start-form');
     bindSelect('meeting-project', value => { captureMeetingDraft(); view().meetingProject = value; render(); });
-    bindSelect('ask-mode', value => { view().askMode = value; render(); });
-    bindSelect('local-model', value => { view().localModel = value; try { localStorage.setItem('local-workos:local-model', value); } catch { /* Optional preference. */ } });
-    bindSelect('agent-model', value => { view().localModel = value; try { localStorage.setItem('local-workos:local-model', value); } catch { /* Optional preference. */ } });
+    bindModelPickers();
     $('#agent-project-scope')?.addEventListener('change', event => { view().agentProjectScope = event.target.checked; render(); });
-    bindSelect('dsh-model', value => { view().dshModel = value; try { localStorage.setItem('local-workos:dsh-model', value); } catch { /* Selection is optional. */ } render(); });
-    bindSelect('research-intent', value=>{view().researchIntent=value;if(value==='workflow'&&view().askMode==='local'){view().askMode='deepseek';notify('交付草稿需要模型。请核对模型和资料范围后再生成。');}render();requestAnimationFrame(()=>$('#question-input')?.focus());});
+    bindSelect('research-intent', value=>{view().researchIntent=value;if(value==='workflow'&&view().askMode==='local'){restoreResearchModel();notify('交付草稿需要模型。请核对模型和资料范围后再生成。');}render();requestAnimationFrame(()=>$('#question-input')?.focus());});
     bindSelect('workflow-purpose', value=>{const state=view();state.workflowKey=value;state.workflowQuality='';state.workflowError='';state.workflowRevisionId='';state.workflowRequest=null;state.conversations.delete(conversationScope('workflow').key);render();requestAnimationFrame(()=>$('#question-input')?.focus());});
     bindSelect('workflow-quality', value=>{view().workflowQuality=value;});
     $('#question-input')?.addEventListener('input', event => { if(view().researchIntent==='actions')view().agentMessage=event.target.value;else if(view().researchIntent==='workflow')view().workflowMessage=event.target.value;else view().question=event.target.value; });
@@ -1536,10 +1549,8 @@
     $('#agent-input')?.addEventListener('input', event => { view().agentMessage = event.target.value; });
     bindSubmit('ask-form', askQuestion); bindSubmit('meeting-summary-form', saveMeetingSummary); bindSubmit('meeting-actions-form', createMeetingTasks); bindSubmit('finance-form', calculateFinance); bindSubmit('ai-settings-form', saveAISettings);
     bindAiComposer('question-input','ask-form');
-    bindSelect('meeting-model', value => { const state=view(); state.meetingModel=value; try{localStorage.setItem('local-workos:meeting-model',value);}catch{/* Optional preference. */} });
     bindSelect('valuation-method', value => { const state = view(); state.valuationMethod = value; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationScenarioResult=null;state.valuationScenariosJson='';state.valuationError = '';state.conversations.delete(conversationScope('valuation').key);render(); });
     bindSelect('valuation-project', value => { view().valuationProjectId = value;view().conversations.delete(conversationScope('valuation').key);render(); });
-    bindSelect('valuation-model', value => { view().valuationModel = value; try { localStorage.setItem('local-workos:dsh-model', value); } catch { /* Optional preference. */ } });
     $('#meeting-transcript-input')?.addEventListener('input',event=>{const state=view();const text=event.target.value;state.meetingTranscriptDraft=text;const id=state.meetingId;state.meetingTranscriptDrafts.set(String(id),text);if(!id)return;clearTimeout(state.transcriptSaveTimer);const label=$('#meeting-save-state');if(label)label.textContent='正在保存原文…';state.transcriptSaveTimer=setTimeout(async()=>{try{await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript:text}});await refreshData();const node=$('#meeting-save-state');if(node)node.textContent='逐字稿已保存在本机';}catch(error){notify('逐字稿保存失败：'+error.message,true);}},700);});
     const meetingDrop=$('[data-meeting-transcript-drop]');
     meetingDrop?.addEventListener('dragover',event=>{event.preventDefault();meetingDrop.classList.add('drag-over');});
@@ -1673,6 +1684,8 @@
       case 'backup': return withBusy(button, '正在备份…', () => download('/backup', `LocalWorkOS-${app.workspace}-${today()}.json`));
       case 'restore': $('#restore-input').click(); return;
       case 'logout-public': await api('/auth/logout', {body:{}}); app.data=null; window.location.replace('/auth/login'); return;
+      case 'models-refresh': return withBusy(button,'读取中…',refreshModels);
+      case 'models-check': return checkSelectedModel();
       case 'refresh-status': return withBusy(button, '正在检查…', async () => { app.boot = await api('/bootstrap'); app.csrf = app.boot.csrf; await refreshData(); render(); notify('本地服务已连接，数据已刷新。'); });
       case 'sync-onedrive': return withBusy(button, '正在同步…', async () => { const status = await api('/sync', { body: {} }); app.boot.sync = status; render(); if (status.error) notify(status.error, true); else notify('项目文件与 JSON 快照已同步到 OneDrive。'); });
       case 'shutdown': if (await confirmDialog('关闭 Local WorkOS 本地服务？', '数据仍保存在本机。页面将断开连接，再次使用需重新运行启动器。', '确认关闭服务', true)) { await api('/shutdown', { body: {} }); app.stopped = true; $('#main').innerHTML = `<section class="state-error"><h1>本地服务已关闭</h1><p>数据已保留。请重新运行 Local WorkOS 启动器，然后点击重新连接。</p>${actionButton('重新连接', 'retry', 'refresh', 'primary')}</section>`; $('#connection-label').textContent = '服务已关闭'; } return;

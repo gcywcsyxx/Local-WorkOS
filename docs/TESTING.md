@@ -2,6 +2,14 @@
 
 Validation uses synthetic fixtures and independent temporary databases. No original user memory or actual model API credentials are read.
 
+### 1.8.0 unified model choice, 2026-10-04
+
+- A reviewed registry round-trips all30 chat choices and displays8 completion-only entries disabled. Tests cover installed GPT Spark, legacy bridge aliases, stale discovery omissions, strict service/model mismatch rejection, exact custom configuration, and durable canonical choice capture without credentials.
+- Real isolated HTTP regressions exercise four service paths across ask, assumptions, meetings, actions and material workflows. Compatible transport parsing, requested identity and credential endpoint scope are checked; GPT/custom nested minutes preserve their choice. Rules bypass AI context, while conflicting service fields reject before mutation.
+- Catalog/bootstrap GET performs no model call. Cancellable synthetic JSON checks read no business records or memory, keep sanitized failure metadata, expire after24hours, reject changed endpoint hashes, and keep missing DSH unavailable even with old success.
+- 57 real Chrome interaction groups pass using fresh profiles and synthetic fixtures. They cover one grouped picker per AI surface, six provider families, independent saved preferences, home staging, disabled work choices, failed-model selection/recheck in settings, Stop with unsaved settings preserved, late verification ignored, and mobile layout. Existing context, cancellation, export and project archiving regressions remain included.
+- 30 real synthetic JSON probes completed:21 verified (14 compatible bridge +7 GPT/DSH);8 old bridge IDs returned HTTP400 twice and GPT Codex Spark failed DSH terminal execution twice. Those9 choices are marked temporarily unavailable and can be rechecked;8 completion-only IDs are excluded from chat probes. No private project material was sent. A valid JSON response verifies this bounded connection/output test, not general output quality or independent bridge upstream identity.
+
 ## Local results
 
 ### 1.7.0 contextual revisions, progress and output folders, 2026-10-04

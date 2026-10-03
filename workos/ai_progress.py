@@ -17,7 +17,7 @@ LABELS = {'pending':'等待请求', 'queued':'等待运行', 'prepare':'准备�
     'interrupted':'服务中断'}
 TERMINAL = {'completed','cancelled','failed','interrupted'}
 RANGES = {'ask':(8,60), 'actions':(15,180), 'agent':(15,180), 'meeting':(15,150),
-          'valuation':(8,90), 'workflow':(20,120), 'plan':(1,5)}
+          'valuation':(8,90), 'workflow':(20,120), 'plan':(1,5), 'model-check':(2,90)}
 
 
 def _iso(timestamp):

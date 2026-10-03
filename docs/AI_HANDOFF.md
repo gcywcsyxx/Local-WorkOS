@@ -1,12 +1,12 @@
 # Local WorkOS — AI engineering handoff
 
-Documentation date: 2026-10-04. Product version: 1.7.0. This document describes persistent contextual revisions, factual AI progress, versioned project output archiving, model-backed ask fallback, cancellable work, quality harness and durable jobs.
+Documentation date: 2026-10-04. Product version: 1.8.0. This document describes the unified provider-grouped selection on every AI surface, exact provider dispatch, synthetic availability checking, persistent contextual revisions, factual AI progress, versioned project output archiving, model-backed ask fallback, cancellable work, quality harness and durable jobs.
 
 Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified behavior and proposed additions. Earlier [README](<../README.md>), [architecture](<ARCHITECTURE.md>) and [testing](<TESTING.md>) descriptions can lag current code; do not remove password auth, editable PPTX or four valuation methods based on historical wording.
 
 ## Source vs install vs data
 - The repository root is editable development source and the Git working tree.
-- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.7.0/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
+- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.8.0/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
 - Runtime personal/demo SQLite, authentication and logs are under `%LOCALAPPDATA%/LocalWorkOS`, never in source control.
 - OneDrive is an optional JSON/text mirror and backup target, not the live SQLite/WAL database or a bidirectional multi-master store.
 - Remote access reaches one authoritative host through its dedicated tunnel; keep that host running and online. Do not attach divergent databases/sessions to the same tunnel from two machines.
@@ -17,6 +17,7 @@ Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified beha
 | File | Purpose |
 |---|---|
 | [server](<../workos/server.py>) | HTTP routes, authentication, Host/Origin/CSRF, model adapters, upload/export |
+| [model catalog](<../workos/model_catalog.py>) | Reviewed identities, canonical service/model resolution, grouped nonsecret catalog and honest statuses |
 | [jobs](<../workos/jobs.py>) | Durable jobs, frozen inputs, restart recovery, idempotent save |
 | [cancellation](<../workos/cancellation.py>) | Workspace-scoped operation tokens, bounded pre-arrival cancellation markers, guarded commits and completed-action receipts |
 | [AI progress](<../workos/ai_progress.py>) | Actual stage events, sanitized public execution records, task-type ETA ranges and completed-stage progress |
@@ -114,3 +115,11 @@ The SOP runs isolated Python, Markdown, API transport, AI run/composer, authenti
 Workflow requests use a workspace-scoped request_id: same payload retries return the same saved draft, an in-flight retry returns workflow_busy/409, changed payload reuse is rejected and a provider failure permits retry. The cache contains the latest 32 successful requests and clears on process restart; it is not a permanent generation ledger. The UI retains the token across network retries and creates a new one when task/provider/source versions change. Compatible provider calls use a 95-second timeout; busy DSH calls reject rather than queue indefinitely. Longer background jobs and durable idempotency remain future work.
 
 Future priorities are immutable citation anchors, evidence/issue reconciliation, full template-based presentation production and imported-workbook editing/recalculation. These are not implied by current exports. Update PRD and handoff with implemented/pending status and verification evidence on every significant delivery; local tests do not prove remote CI or visual fidelity of every generated artifact.
+
+## Unified models (1.8.0)
+
+`bootstrap.models` and `GET /api/models` expose `groups`, each containing exact `selection_id=mode:model_id`, canonical `mode/provider`, name, status and availability. This endpoint performs no discovery or model call. GPT uses installed DSH; compatible presets use the reviewed loopback bridge catalog, including proven newer aliases omitted by its stale `/models` map. Completion-only entries remain visible and disabled. Do not expand the execution allowlist from arbitrary discovery text or silently remap identities.
+
+`POST /api/models/check` runs a cancellable synthetic JSON-only request and updates private `model-status.json`; it reads no project records, files or memory. Cache is scoped to a nonsecret endpoint/model hash and expires after24hours. Missing DSH overrides cached success. Failed selections can be retested in settings, but not submitted on work surfaces. Bridge output echoes requested IDs, so connection validation cannot independently establish upstream identity. Custom API credentials go only to their configured endpoint and never appear in catalog/cache/job snapshots; credentials remain runtime memory only.
+
+Ask, agent, meeting, valuation and material generation share canonical resolution. Legacy known model IDs infer their fixed service; explicit mode/provider mismatch or configured custom-ID mismatch rejects before provider execution. Local-only ask remains lexical; rules meeting bypasses AI context. GPT action turns use DSH with the same scoped JSON tool protocol; arbitrary DSH tools stay disabled.
