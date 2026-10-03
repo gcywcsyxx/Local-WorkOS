@@ -15,7 +15,7 @@ FIELDS = {
  'projects': {'name','sector','stage','priority','thesis','next_step','owner','valuation','tags'},
  'tasks': {'title','project_id','status','priority','owner','due','description','meeting_id'},
  'documents': {'title','project_id','kind','category','source_ref','content','filename','private','page_count','hash','chunks','attachment_ref','attachment_hash','attachment_name'},
- 'meetings': {'title','project_id','date','participants','transcript','summary'},
+ 'meetings': {'title','project_id','date','participants','transcript','summary','experts','matrix','contents'},
  'notes': {'title','project_id','body','status','document_id','source_quote'},
  'deliverables': {'title','project_id','kind','body'},
  'activity': {'title','kind','project_id'},
@@ -32,7 +32,7 @@ DEFAULTS = {
  'projects':dict(stage='线索',priority='中',sector='',thesis='',next_step='',owner='',valuation='',tags=''),
  'tasks':dict(status='待办',priority='中',project_id='',owner='',due='',description='',meeting_id=''),
  'documents':dict(project_id='',kind='research',category='',source_ref='',content='',filename='',private=True,page_count=1,hash='',chunks=[],attachment_ref='',attachment_hash='',attachment_name=''),
- 'meetings':dict(project_id='',date='',participants='',transcript='',summary=''),
+ 'meetings':dict(project_id='',date='',participants='',transcript='',summary='',experts=[],matrix={},contents=[]),
  'notes':dict(project_id='',body='',status='待核实',document_id='',source_quote=''),
  'deliverables':dict(project_id='',kind='自定义',body=''),
  'activity':dict(project_id='',kind='change'),
@@ -96,6 +96,24 @@ class Store:
     for chunk in value:
      if not isinstance(chunk,dict) or not isinstance(chunk.get('text'),str): raise ValueError('段落格式不正确')
      if len(chunk['text'])>30000: raise ValueError('单段内容超过限制')
+   elif col=='meetings' and key=='experts':
+    if not isinstance(value,list) or len(value)>40:raise ValueError('专家列表最多40项')
+    for expert in value:
+     if not isinstance(expert,dict) or set(expert)-{'institution','title','date','background','comments','content'}:raise ValueError('专家记录字段无效')
+     for field,text in expert.items():
+      if field=='comments':
+       if not isinstance(text,list) or len(text)>20 or any(not isinstance(x,str) or len(x)>2000 for x in text):raise ValueError('专家点评格式无效')
+      elif not isinstance(text,str) or len(text)>(200000 if field=='content' else 8000):raise ValueError('专家文本无效或超过限制')
+   elif col=='meetings' and key=='contents':
+    if not isinstance(value,list) or len(value)>80 or any(not isinstance(x,str) or len(x)>400 for x in value):raise ValueError('目录格式无效')
+   elif col=='meetings' and key=='matrix':
+    if not isinstance(value,dict) or set(value)-{'topics','experts','cells'}:raise ValueError('比较矩阵格式无效')
+    topics=value.get('topics',[]);columns=value.get('experts',[]);cells=value.get('cells',[])
+    if not all(isinstance(x,list) for x in (topics,columns,cells)) or len(topics)>80 or len(columns)>40:raise ValueError('比较矩阵过大或格式无效')
+    if any(not isinstance(x,str) or len(x)>200 for x in topics):raise ValueError('议题格式无效')
+    count=len(obj.get('experts',[]))
+    if any(type(x) is not int or not 0<=x<count for x in columns) or len(set(columns))!=len(columns):raise ValueError('专家索引无效')
+    if len(cells)!=len(topics) or any(not isinstance(row,list) or len(row)!=len(columns) or any(not isinstance(x,str) or len(x)>8000 for x in row) for row in cells):raise ValueError('矩阵单元格与议题或专家数量不一致')
    elif key=='private':
     if not isinstance(value,bool): raise ValueError('资料隐私状态必须为布尔值')
    elif key=='page_count':
@@ -141,6 +159,8 @@ class Store:
   with self.lock,self.db:
    current=self.get(col,id)
    updated={**current,**data,'updated_at':now()}
+   if col=='meetings' and 'summary' in data and data['summary']!=current.get('summary') and not {'experts','matrix','contents'}&set(data):
+    updated.update(experts=[],matrix={},contents=[])
    self._validate(col,updated)
    self.db.execute('UPDATE records SET payload=? WHERE collection=? AND id=?',(ensure_json(updated),col,id))
    if col!='activity': self._log('更新 '+updated.get('name',updated.get('title','')),updated.get('project_id',''))

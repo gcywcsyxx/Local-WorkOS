@@ -615,8 +615,8 @@
       try{
         const result=await api('/meeting-draft',{body:{provider:'deepseek',model_id:view().meetingModel||view().localModel||'deepseek-v4.1-flash',transcript,title:meeting.title,date:meeting.date,participants:meeting.participants}});
         const normalized=formatMinuteText(result.summary||'');
-        await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{summary:normalized}});
-        view().drafts.set(String(id),{summary:normalized,actions:[],warnings:result.warnings||[],mode:'ai',model:result.model||''});
+        await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript,summary:normalized,experts:result.experts||[],matrix:result.matrix||{},contents:result.contents||[]}});
+        view().drafts.set(String(id),{...result,summary:normalized,actions:result.actions||[]});
         await refreshData();notify('纪要已整理并自动保存。可编辑后直接导出 Word / PDF。');
       }finally{view().meetingAiBusy=false;render();}
     });
@@ -639,7 +639,7 @@
     if (!meeting?.transcript?.trim()) { notify('请先录入会议逐字稿。', true); return; }
     if (view().drafts.has(String(id)) && !await confirmDialog('重新生成规则草稿？', '这会替换页面中尚未保存的规则草稿及候选行动编辑，不影响已经创建的任务。', '重新生成')) return;
     await withBusy(button, '正在生成规则草稿…', async () => {
-      const draft = await api('/meeting-draft', { body: { transcript: meeting.transcript } });
+      const draft = await api('/meeting-draft', { body: { provider: 'rules', transcript: meeting.transcript } });
       view().drafts.set(String(id), { ...draft, actions: Array.isArray(draft.actions) ? draft.actions.map(action => ({ ...action })) : [] });
       render(); notify('规则草稿已生成。请核对、编辑纪要并逐项确认行动。');
     });

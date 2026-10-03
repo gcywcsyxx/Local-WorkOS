@@ -314,6 +314,26 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result['matrix']['topics'],['采购份额'])
         self.assertEqual(result['matrix']['cells'][0][0],'原文短句')
         self.assertEqual(result['experts'][0]['institution'],'合成机构')
+        payload={key:result[key] for key in ('summary','experts','matrix','contents')}
+        status,saved=self.request('PATCH','/api/meetings/'+meeting['id'],payload)
+        self.assertEqual(status,200,saved)
+        status,reopened=self.request('GET','/api/meetings/'+meeting['id'])
+        self.assertEqual(status,200,reopened)
+        self.assertEqual(reopened['matrix'],result['matrix'])
+        self.assertEqual(reopened['experts'],result['experts'])
+        status,word=self.request('GET','/api/meeting-export/'+meeting['id']+'?format=docx')
+        self.assertEqual(status,200,word)
+        import io
+        from docx import Document
+        document=Document(io.BytesIO(word))
+        self.assertEqual(len(document.tables),1)
+        self.assertIn('原文短句',document.tables[0].cell(1,1).text)
+        status,edited=self.request('PATCH','/api/meetings/'+meeting['id'],{'summary':'人工修改后的纪要'})
+        self.assertEqual(status,200,edited)
+        status,word=self.request('GET','/api/meeting-export/'+meeting['id']+'?format=docx')
+        document=Document(io.BytesIO(word))
+        self.assertEqual(len(document.tables),0)
+        self.assertIn('人工修改后的纪要','\n'.join(p.text for p in document.paragraphs))
         with patch.object(self.app,'local_chat',return_value=(json.dumps({'title':'x','summary':'正文','experts':[None,{'institution':123,'comments':'bad','content':None},{'institution':'ok'}],'matrix':{'topics':'bad','experts':None,'cells':[]},'contents':'bad'},ensure_ascii=False),'deepseek-v4.1-flash')):
             status,messy=self.request('POST','/api/meeting-draft',{'provider':'deepseek','transcript':'t'})
         self.assertEqual(status,200,messy)
