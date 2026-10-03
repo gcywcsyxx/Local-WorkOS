@@ -4,6 +4,10 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.5.2 homepage project creation, 2026-10-04
+
+- 29 isolated Chrome/CDP groups pass, including creation from the homepage button/dropdown, cancel preserving the prior project/request, empty-name rejection, minimal creation automatically selected, retained workflow purpose, unchanged existing materials and research selections, plus desktop/375px layout.
+
 ### 1.5.0 harness revision, 2026-10-04
 
 - 1.5.1 adds controlled shutdown/restart regressions with a blocked model: an old late response cannot save or overwrite a fresh process's retry/completed checkpoint. Extra submit fields cannot persist credentials.

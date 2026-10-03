@@ -250,6 +250,28 @@ async function main() {
     assert(result.cards.includes(alpha.name) && result.cards.includes(beta.name) && result.composer===1 && result.purposes.length>=12 && result.routes===3, JSON.stringify(result));
     await screenshot('home-1280');
   });
+  await check('homepage project creation validates name auto-selects and preserves existing work', async () => {
+    const before=await api('state'),message='Synthetic preserve home work while creating a company';
+    await route('research');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');
+    await route('overview');await select('#start-project',beta.id);await select('#start-purpose','brief');await fill('#start-input',message);
+    assert(await cdp.evaluate("!!document.querySelector('.start-work [data-action=start-create-project]')&&[...document.querySelector('#start-project').options].some(item=>item.value==='__create_project__')"),'Homepage project creation entries missing');
+    await click('[data-action=start-create-project]');await until(()=>cdp.evaluate("document.querySelector('#modal').open&&!!document.querySelector('#field-name')"),'home new-project dialog');
+    await fill('#field-name','Synthetic cancelled project');await click('[data-close-dialog=modal]');
+    const cancelled=await cdp.evaluate("({project:document.querySelector('#start-project').value,message:document.querySelector('#start-input').value,purpose:document.querySelector('#start-purpose').value,open:document.querySelector('#modal').open})");
+    assert(!cancelled.open&&cancelled.project===beta.id&&cancelled.message===message&&cancelled.purpose==='brief','Cancellation changed current home work: '+JSON.stringify(cancelled));
+    assert(JSON.stringify((await api('state')).projects)===JSON.stringify(before.projects),'Cancelled project was persisted');
+    await select('#start-project','__create_project__');await until(()=>cdp.evaluate("document.querySelector('#modal').open&&!!document.querySelector('#field-name')"),'dropdown new-project dialog');
+    assert(await cdp.evaluate("document.querySelector('#field-name').required"),'New project name is not required');await fill('#field-name','');await click('#modal-submit');
+    assert(await cdp.evaluate("document.querySelector('#modal').open&&!document.querySelector('#field-name').checkValidity()"),'Blank project name did not retain validation dialog');
+    assert(JSON.stringify((await api('state')).projects)===JSON.stringify(before.projects),'Blank name created a project');
+    await fill('#field-name','Synthetic created from home');await click('#modal-submit');await until(()=>cdp.evaluate("!document.querySelector('#modal').open&&location.hash==='#overview'&&!!document.querySelector('#start-input')"),'new home project saved');
+    const after=await api('state'),created=after.projects.find(item=>item.name==='Synthetic created from home');
+    assert(created&&after.projects.length===before.projects.length+1&&await cdp.evaluate('document.querySelector("#start-project").value==='+q(created.id)),'Created project not automatically selected');
+    assert(await cdp.evaluate('document.querySelector("#start-input").value==='+q(message)+'&&document.querySelector("#start-purpose").value===\'brief\''),'Project creation lost home request or purpose');
+    assert(JSON.stringify(after.projects.filter(item=>item.id!==created.id))===JSON.stringify(before.projects)&&JSON.stringify(after.documents)===JSON.stringify(before.documents),'Creating a project changed prior projects or moved/copied materials');
+    await route('research');assert(await cdp.evaluate('document.querySelector("#research-project").value==='+q(alpha.id)+'&&document.querySelector('+q('[data-source-id="'+doc.id+'"]')+').checked'),'Project creation changed prior research source scope/selection');
+    await select('#research-project','');await route('overview');await select('#start-project','');await select('#start-purpose','');await fill('#start-input','');
+  });
   await check('legacy #projects opens company home', async () => { await route('projects'); assert(await cdp.evaluate("!!document.querySelector('.project-card') && !/不存在|错误/.test(document.querySelector('main h1').textContent)"), 'Legacy project route broken'); });
   await route('research');
   await check('one research prompt textarea', async () => assert(await cdp.evaluate("document.querySelectorAll('main textarea').length===1 && !!document.querySelector('#question-input')"), 'Research has duplicate prompt textareas'));

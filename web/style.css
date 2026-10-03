@@ -700,6 +700,7 @@ body.drop-active::after{content:"松手即导入：文件或文本都会保存�
 
 /* Keep routine controls and generated research comfortable to read. */
 .start-work .button{font-size:13px}.start-work .start-shortcuts .button{font-size:13px}
+.project-create-details{margin:16px 0 12px;padding-top:12px;border-top:1px solid var(--line)}.project-create-details summary{cursor:pointer;font-size:14px;color:var(--muted);margin-bottom:14px}
 .material-library .button{font-size:14px}
 .answer-text.markdown-body,.note-body.markdown-body,.agent-answer.markdown-body{font-size:14px}
 .question-box textarea{font-size:14px}.question-bottom select{font-size:12px}.question-bottom .button{font-size:14px}

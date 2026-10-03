@@ -59,6 +59,7 @@
     ['settings', '设置', 'SETTINGS', 'settings']
   ];
   const STAGES = ['线索', '初筛', '尽调', '投委会', '投后', '归档'];
+  const CREATE_PROJECT_VALUE = '__create_project__';
   const PRIORITIES = ['高', '中', '低'];
   const STATUSES = ['待办', '进行中', '完成'];
   const NOTE_STATUSES = ['待核实', '已核实', '暂不采用'];
@@ -133,7 +134,7 @@
   }
   const options = (values, selected) => values.map(value => `<option value="${esc(value)}"${selectedAttr(value, selected)}>${esc(value)}</option>`).join('');
   const projectOptions = selected => `<option value="">不关联项目</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}`;
-  const projectFilter = (id, selected, label = '全部项目') => `<select id="${esc(id)}" class="compact-select" aria-label="按项目筛选"><option value="">${esc(label)}</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}</select>`;
+  const projectFilter = (id, selected, label = '全部项目', allowCreate = false, disabled = false) => `<select id="${esc(id)}" class="compact-select" aria-label="${allowCreate?'关联项目':'按项目筛选'}" ${disabled?'disabled':''}><option value="">${esc(label)}</option>${list('projects').map(item => `<option value="${esc(item.id)}"${selectedAttr(item.id, selected)}>${esc(item.name)}</option>`).join('')}${allowCreate?`<option value="${CREATE_PROJECT_VALUE}">＋ 新建项目…</option>`:''}</select>`;
   const badge = (value, tone) => `<span class="tag ${tone || ({ 高: 'red', 中: 'amber', 低: 'gray', 待核实: 'amber', 已核实: 'green', 暂不采用: 'gray', 尽调: 'green', 初筛: 'blue', 投委会: 'amber', 归档: 'gray', 完成: 'green', 进行中: 'blue' }[value] || '')}">${esc(value)}</span>`;
   const actionButton = (label, action, symbol = '', classes = '', attrs = '') => `<button type="button" class="button ${classes}" data-action="${esc(action)}" ${attrs}>${symbol ? icon(symbol) : ''}${esc(label)}</button>`;
   const iconButton = (label, action, symbol, attrs = '', classes = '') => `<button type="button" class="icon-button ${classes}" title="${esc(label)}" aria-label="${esc(label)}" data-action="${esc(action)}" ${attrs}>${icon(symbol)}</button>`;
@@ -333,7 +334,7 @@
   }
 
   // Persistent core records share one CRUD implementation and one source of truth.
-  async function editRecord(collection, id = '', preset = {}) {
+  async function editRecord(collection, id = '', preset = {}, context = {}) {
     if (!(collection in LABELS)) return;
     let existing = id ? record(collection, id) : null;
     if (id && !existing) { notify('这条记录已不存在，请刷新后重试。', true); return; }
@@ -362,7 +363,11 @@
       body = inputField('title', '交付标题', item.title, { required: true, maxlength: 300 }) + '<div class="field-row">' + projectField(item.project_id) + selectField('kind', '交付类型', deliverableKindOptions(item.kind || '自定义')) + '</div>' + textareaField('body', '正文', item.body, { rows: 12, placeholder: '使用纯文本或 Markdown 编写。保存后可继续编辑、导出。' });
     }
     if (collection !== 'projects') body += organizationField(item, preset);
-    openModal(`${id ? '编辑' : '新建'}${LABELS[collection]}`, body, async form => {
+    if (collection === 'projects' && context.quickProject) {
+      const detailsAt = body.indexOf('<div class="field-row">');
+      body = body.slice(0, detailsAt) + '<p class="inline-note">填写名称即可创建，其他资料可以以后补充。</p><details class="project-create-details"><summary>更多项目资料（选填）</summary>' + body.slice(detailsAt) + '</details>';
+    }
+    const dialog = openModal(`${id ? '编辑' : '新建'}${LABELS[collection]}`, body, async form => {
       const payload = Object.fromEntries(form.entries());
       for (const key of Object.keys(payload)) payload[key] = String(payload[key]).trim();
       if (collection === 'documents' && !id) { payload.kind = 'research'; payload.private = true; }
@@ -373,13 +378,24 @@
       if (collection === 'projects') view().projectId = savedId;
       if (collection === 'meetings') { view().meetingId = savedId; view().drafts.delete(String(savedId)); }
       if (collection === 'deliverables') { view().deliverableId = savedId; view().deliverableDirty = false; }
+      if (context.onSaved) context.onSaved(saved);
       await refreshData(); render(); notify(`${LABELS[collection]}已${id ? '更新' : '保存'}到${workspaceName()}。`);
-    }, { wide: ['documents', 'meetings', 'deliverables'].includes(collection), ...(id ? { deleteCollection: collection, deleteId: id } : {}) });
+    }, { wide: ['documents', 'meetings', 'deliverables'].includes(collection), ...(context.quickProject?{submitText:'创建并使用'}:{}), ...(id ? { deleteCollection: collection, deleteId: id } : {}) });
     if (collection !== 'projects') $('#field-project_id')?.addEventListener('change', event => {
       const select = $('#field-task_group'); if (!select) return;
       const groups = projectGroups(event.target.value), selected = groups.includes(select.value) ? select.value : '';
       select.innerHTML = '<option value="">自动整理</option>' + options(groups, selected);
     });
+    if (context.quickProject) $('#field-name')?.focus();
+    return dialog;
+  }
+  async function createStartProject() {
+    const state = view(); if(state.startBusy || app.uploadBusy || app.modalBusy)return;
+    state.startMessage = $('#start-input')?.value ?? state.startMessage;
+    state.startPurpose = $('#start-purpose')?.value ?? state.startPurpose;
+    const select = $('#start-project'); if(select)select.value=state.startProject;
+    const dialog = await editRecord('projects', '', {}, {quickProject:true,onSaved:saved=>{state.startProject=String(saved.id);}});
+    dialog?.addEventListener('close',()=>{if(view()===state && app.page==='overview')$('#start-input')?.focus();},{once:true});
   }
   async function deleteRecord(collection, id) {
     const item = record(collection, id);
@@ -626,7 +642,7 @@
   function renderStartWork(){
     const state=view(), busy=state.startBusy||app.uploadBusy;
     const selected=list('documents').filter(doc=>state.startSourceIds.has(String(doc.id))&&String(doc.project_id||'')===String(state.startProject));
-    return `<section class="panel start-work"><h2>今天要完成什么？</h2><p class="small muted">研究、Memo、协议、技术解释、邮件和模型，用一句话开始。</p><form id="start-form"><label for="start-input" class="sr-only">描述工作需求</label><div class="start-input-row"><input id="start-input" maxlength="8000" value="${esc(state.startMessage)}" placeholder="例如：为这个项目写一份投委会 Memo，并列出仍需核实的问题" ${busy?'disabled':''}><button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>准备中…':icon('arrow')+'开始工作'}</button></div><div class="row wrap start-controls">${projectFilter('start-project',state.startProject,'关联项目（可选）')}<select id="start-purpose" class="compact-select" aria-label="工作用途" ${busy?'disabled':''}><option value="">自动识别用途</option>${workflowOptions(state.startPurpose)}</select>${actionButton('添加文件','start-upload','upload','small soft',busy?'disabled':'')}${actionButton('添加文件夹','start-folder','upload','small soft',busy?'disabled':'')}</div></form><div class="row wrap start-shortcuts" aria-label="常用工作">${['dd','ic','legal','technology','email','expert_request'].filter(key=>workflowInfo(key)).map(key=>actionButton(workflowInfo(key).title,'start-workflow','','small ghost',`data-key="${esc(key)}" ${busy?'disabled':''}`)).join('')}${actionButton('会议整理','start-route','meetings','small ghost',`data-request="整理会议纪要" ${busy?'disabled':''}`)}${actionButton('财务建模','start-route','finance','small ghost',`data-request="建立财务估值模型" ${busy?'disabled':''}`)}${actionButton('整理项目材料','start-route','file','small ghost',`data-request="整理项目材料和版本" ${busy?'disabled':''}`)}</div>${selected.length?`<p class="small muted mt-12">已添加 ${selected.length} 份材料：${selected.map(doc=>esc(doc.title)).join('、')}。开始工作后可核对范围，再生成草稿。</p>`:''}</section>`;
+    return `<section class="panel start-work"><h2>今天要完成什么？</h2><p class="small muted">研究、Memo、协议、技术解释、邮件和模型，用一句话开始。</p><form id="start-form"><label for="start-input" class="sr-only">描述工作需求</label><div class="start-input-row"><input id="start-input" maxlength="8000" value="${esc(state.startMessage)}" placeholder="例如：为这个项目写一份投委会 Memo，并列出仍需核实的问题" ${busy?'disabled':''}><button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>准备中…':icon('arrow')+'开始工作'}</button></div><div class="row wrap start-controls">${projectFilter('start-project',state.startProject,'关联项目（可选）',true,busy)}${actionButton('新建项目','start-create-project','plus','small soft',busy?'disabled':'')}<select id="start-purpose" class="compact-select" aria-label="工作用途" ${busy?'disabled':''}><option value="">自动识别用途</option>${workflowOptions(state.startPurpose)}</select>${actionButton('添加文件','start-upload','upload','small soft',busy?'disabled':'')}${actionButton('添加文件夹','start-folder','upload','small soft',busy?'disabled':'')}</div></form><div class="row wrap start-shortcuts" aria-label="常用工作">${['dd','ic','legal','technology','email','expert_request'].filter(key=>workflowInfo(key)).map(key=>actionButton(workflowInfo(key).title,'start-workflow','','small ghost',`data-key="${esc(key)}" ${busy?'disabled':''}`)).join('')}${actionButton('会议整理','start-route','meetings','small ghost',`data-request="整理会议纪要" ${busy?'disabled':''}`)}${actionButton('财务建模','start-route','finance','small ghost',`data-request="建立财务估值模型" ${busy?'disabled':''}`)}${actionButton('整理项目材料','start-route','file','small ghost',`data-request="整理项目材料和版本" ${busy?'disabled':''}`)}</div>${selected.length?`<p class="small muted mt-12">已添加 ${selected.length} 份材料：${selected.map(doc=>esc(doc.title)).join('、')}。开始工作后可核对范围，再生成草稿。</p>`:''}</section>`;
   }
   function renderOverview() {
     const recentMeetings=[...list('meetings')].sort((a,b)=>String(b.updated_at).localeCompare(String(a.updated_at))).slice(0,3);
@@ -1236,7 +1252,7 @@
     bindSelect('research-project', value => { view().researchProject = value; view().sourceGroup = ''; view().selectedSources.clear(); render(); });
     bindSelect('library-group', value => { view().libraryGroup = value; render(); });
     bindSelect('source-group', value => { view().sourceGroup = value; view().selectedSources.clear(); render(); });
-    bindSelect('start-project', value=>{view().startProject=value;render();});
+    bindSelect('start-project', value=>{if(value===CREATE_PROJECT_VALUE){createStartProject().catch(showError);return;}view().startProject=value;render();});
     bindSelect('start-purpose', value=>{view().startPurpose=value;});
     $('#start-input')?.addEventListener('input',event=>{view().startMessage=event.target.value;});
     bindSubmit('start-form',startWork);
@@ -1310,6 +1326,7 @@
   async function handleAction(button) {
     const { action, id, collection } = button.dataset;
     switch (action) {
+      case 'start-create-project': return createStartProject();
       case 'start-workflow': return startWork(button.dataset.key);
       case 'start-route': view().startMessage=button.dataset.request||'';view().startPurpose='';render();return startWork();
       case 'start-folder':
