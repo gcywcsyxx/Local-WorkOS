@@ -389,6 +389,20 @@ class ServerTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(self.request('POST', '/api/ai/settings', {field: 123})[0], 400)
 
+    def test_host_guard_allows_only_localhost_unless_public_origin_configured(self):
+        status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com'})
+        self.assertEqual(status,403)
+        self.app.public_origin='https://workos.example.com'
+        try:
+            status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com'})
+            self.assertEqual(status,200)
+            status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'https://evil.invalid'})
+            self.assertEqual(status,403)
+            status,_=self.request('GET','/api/health',headers={'Host':'workos.example.com','Origin':'https://workos.example.com'})
+            self.assertEqual(status,200)
+        finally:
+            self.app.public_origin=''
+
     def test_export_pptx_endpoint(self):
         record=self.create('deliverables',{'title':'Synthetic PPT','body':'# Market\n• Market size 100.'})
         status,payload=self.request('GET','/api/export/'+record['id']+'?format=pptx')

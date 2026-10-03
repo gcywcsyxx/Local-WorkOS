@@ -88,6 +88,9 @@ class Application:
     logging.warning('OneDrive mirror unavailable; local data remains safe: %s',type(exc).__name__)
   self.csrf=secrets.token_urlsafe(32)
   self.port=port
+  public_origin=(os.environ.get('WORKOS_PUBLIC_ORIGIN') or '').strip().rstrip('/')
+  if public_origin and not public_origin.startswith('https://'):public_origin=''
+  self.public_origin=public_origin
   self.memory_root=find_root(ROOT)
   self.ai={'base_url':'','model':'','api_key':''}
   self.ai_lock=threading.Lock()
@@ -349,9 +352,13 @@ class Handler(BaseHTTPRequestHandler):
  def headers_ok(self,write=False):
   host=self.headers.get('Host','')
   accepted={f'127.0.0.1:{self.app.port}',f'localhost:{self.app.port}'}
-  if host not in accepted:raise PermissionError('仅允许本机访问')
+  public=self.app.public_origin
+  if public:accepted.add(public.split('://',1)[-1])
+  if host not in accepted:raise PermissionError('仅允许本机或已配置的受保护入口访问')
   origin=self.headers.get('Origin')
-  if origin and origin not in {'http://'+h for h in accepted}:raise PermissionError('不允许跨站请求')
+  allowed_origins={'http://'+h for h in accepted}|({'https://'+host,'http://'+host} if public else set())
+  if public:allowed_origins.add(public)
+  if origin and origin not in allowed_origins:raise PermissionError('不允许跨站请求')
   if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),self.app.csrf):raise PermissionError('会话校验失败，请刷新页面')
  def workspace(self):
   mode=self.headers.get('X-Workspace','personal')
