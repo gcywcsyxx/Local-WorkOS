@@ -238,7 +238,8 @@ def pptx_report(record):
  from pptx.dml.color import RGBColor
  from pptx.enum.text import PP_ALIGN
  title=str(record.get('title') or 'Research Material')[:200]
- body=str(record.get('body') or '').replace('\\n','\n').replace('\r\n','\n').replace('\r','\n')
+ body=str(record.get('body') or '').replace('\r\n','\n').replace('\r','\n')
+ if '\n' not in body:body=body.replace('\\n','\n')
  prs=Presentation();prs.slide_width= Inches(13.333);prs.slide_height= Inches(7.5)
  navy=RGBColor(23,54,93);blue=RGBColor(47,91,147);cream=RGBColor(250,246,235);muted=RGBColor(95,110,125)
  def add_title(slide,text,subtitle=None):
@@ -254,19 +255,44 @@ def pptx_report(record):
  box=slide.shapes.add_textbox(Inches(.9),Inches(1.9),Inches(11.5),Inches(1.3));p=box.text_frame.paragraphs[0];p.text=title;p.font.name='Arial';p.font.size=Pt(30);p.font.bold=True;p.font.color.rgb=navy
  sub=slide.shapes.add_textbox(Inches(.95),Inches(3.3),Inches(11),Inches(.7));p=sub.text_frame.paragraphs[0];p.text='讨论材料 / 投资研究';p.font.name='Arial';p.font.size=Pt(18);p.font.color.rgb=blue
  note=slide.shapes.add_textbox(Inches(.95),Inches(6.65),Inches(11),Inches(.35));p=note.text_frame.paragraphs[0];p.text='请核对数据、来源、保密范围和结论口径后再外发。';p.font.name='Arial';p.font.size=Pt(10);p.font.color.rgb=muted
- # Split content into heading-led editable slides, capped for safety.
- sections=[];heading='核心内容';lines=[]
- for raw in body.replace('\r','').split('\n'):
-  line=raw.strip()
-  if line.startswith('#'):
-   if lines or sections or heading!='核心内容':sections.append((heading,lines))
-   heading=line.lstrip('# ').strip() or '内容';lines=[]
-  elif line:lines.append(line)
- if lines or heading!='核心内容':sections.append((heading,lines))
- if not sections:sections=[('核心内容',[body or '暂无正文'])]
- pages=_slide_pages(sections)
- for index,(head,items) in enumerate(pages,1):
+ from .deck_blocks import parse_blocks
+ pages=[]
+ for block in parse_blocks(body):
+  head=block["heading"]
+  if block["kind"]=="text":
+   pages.extend(("text",title,items) for title,items in _slide_pages([(head,block["items"])]))
+  elif block["kind"]=="table":
+   rows=block["rows"]
+   for start in range(0,max(1,len(rows)),6):
+    pages.append(("table",head if not start else head+"（续"+str(start//6+1)+"）",{"header":block["header"],"rows":rows[start:start+6]}))
+  else:pages.append(("chart",block["data"].get("title") or head,block["data"]))
+  if len(pages)>200:raise ValueError("正文需超过200页，请拆分；未生成截断PPT")
+ for index,(kind,head,items) in enumerate(pages,1):
   slide=prs.slides.add_slide(prs.slide_layouts[6]);slide.background.fill.solid();slide.background.fill.fore_color.rgb=RGBColor(255,255,255);add_title(slide,head,'证据与结论需回到来源材料复核')
+  if kind=="chart":
+   from pptx.chart.data import CategoryChartData
+   from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+   data=CategoryChartData();data.categories=items["categories"]
+   for series in items["series"]:data.add_series(series["name"],series["values"])
+   chart_type={"column":XL_CHART_TYPE.COLUMN_CLUSTERED,"bar":XL_CHART_TYPE.BAR_CLUSTERED,"line":XL_CHART_TYPE.LINE_MARKERS}[items["type"]]
+   chart=slide.shapes.add_chart(chart_type,Inches(.9),Inches(1.65),Inches(11.6),Inches(4.9),data).chart
+   chart.has_legend=len(items["series"])>1
+   if chart.has_legend:chart.legend.position=XL_LEGEND_POSITION.BOTTOM
+   source=items.get("source") or "来源未提供；数据来自交付物中的明确图表数据块"
+   source_box=slide.shapes.add_textbox(Inches(.9),Inches(6.64),Inches(11.6),Inches(.35))
+   source_box.text_frame.paragraphs[0].text=source;source_box.text_frame.paragraphs[0].font.size=Pt(10)
+   slide.notes_slide.notes_text_frame.text="图表来源："+source
+   add_footer(slide,index+1);continue
+  if kind=="table":
+   rows=[items["header"]]+items["rows"];table=slide.shapes.add_table(len(rows),len(items["header"]),Inches(.9),Inches(1.65),Inches(11.6),Inches(4.9)).table
+   for ri,row in enumerate(rows):
+    for ci,value in enumerate(row):
+     cell=table.cell(ri,ci);cell.text=value;cell.text_frame.word_wrap=True
+     cell.fill.solid();cell.fill.fore_color.rgb=navy if ri==0 else cream
+     for paragraph in cell.text_frame.paragraphs:
+      paragraph.font.name="Arial";paragraph.font.size=Pt(12);paragraph.font.bold=ri==0;paragraph.font.color.rgb=RGBColor(255,255,255) if ri==0 else RGBColor(36,51,69)
+   slide.notes_slide.notes_text_frame.text="可编辑表格；数值及口径保持原交付正文，请核对来源。"
+   add_footer(slide,index+1);continue
   box=slide.shapes.add_textbox(Inches(.9),Inches(1.55),Inches(11.6),Inches(5.25));tf=box.text_frame;tf.clear();tf.word_wrap=True
   for j,line in enumerate(items):
     p=tf.paragraphs[0] if j==0 else tf.add_paragraph();text=line;level=0;bullet=False
