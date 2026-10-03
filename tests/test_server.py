@@ -298,7 +298,9 @@ class ServerTests(unittest.TestCase):
         table=doc.tables[0];self.assertEqual(len(table.rows),11);self.assertEqual(len(table.columns),2)
         self.assertIn('目录',text)
         self.assertIn('合成机构0-合成职务',text)
-        self.assertIn('合成机构0-合成职务\t3',text)
+        self.assertIn('合成机构0-合成职务\t',text)
+        self.assertIn('PAGEREF expert_0',doc.element.xml)
+        self.assertNotIn('合成机构0-合成职务\t3',text)
         for value in ('合成机构0','合成机构4','采购份额','合成机构4-合成职务'):
             self.assertIn(value,text)
 

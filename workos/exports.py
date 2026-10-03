@@ -83,13 +83,20 @@ def expert_minutes_docx(title,summary,participants='',date_text='',experts=None,
    doc.add_page_break()
   if len(expert_list)>=4:
    from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
+   from docx.oxml import OxmlElement
    doc.add_heading('目录',1);entries=contents if isinstance(contents,list) else []
+   update=OxmlElement('w:updateFields');update.set(qn('w:val'),'true');doc.settings.element.append(update)
    for i,item in enumerate(expert_list):
     fallback='-'.join(str(item.get(k,'')).strip() for k in ('institution','title') if item.get(k)) or ('专家 '+str(i+1))
-    toc=doc.add_paragraph();toc.paragraph_format.tab_stops.add_tab_stop(Cm(16.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS);toc.add_run(str(entries[i] if i<len(entries) else fallback));toc.add_run('\t'+str(i+3))
+    toc=doc.add_paragraph();toc.paragraph_format.tab_stops.add_tab_stop(Cm(16.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+    toc.add_run(str(entries[i] if i<len(entries) else fallback));toc.add_run('\t')
+    field=OxmlElement('w:fldSimple');field.set(qn('w:instr'),' PAGEREF expert_'+str(i)+' '+chr(92)+'h ');field.set(qn('w:dirty'),'true')
+    run=OxmlElement('w:r');text=OxmlElement('w:t');text.text='更新域';run.append(text);field.append(run);toc._p.append(field)
    doc.add_page_break()
   for i,item in enumerate(expert_list):
-   name='-'.join(str(item.get(k,'')).strip() for k in ('institution','title') if item.get(k)) or ('专家 '+str(i+1));doc.add_heading(name,1)
+   name='-'.join(str(item.get(k,'')).strip() for k in ('institution','title') if item.get(k)) or ('专家 '+str(i+1));heading=doc.add_heading(name,1)
+   if len(expert_list)>=4:
+    start=OxmlElement('w:bookmarkStart');start.set(qn('w:id'),str(i));start.set(qn('w:name'),'expert_'+str(i));end=OxmlElement('w:bookmarkEnd');end.set(qn('w:id'),str(i));heading._p.insert(0,start);heading._p.append(end)
    date_value=str(item.get('date') or date_text or '').strip()
    if date_value:doc.add_paragraph(date_value)
    doc.add_heading('专家背景',2);doc.add_paragraph(str(item.get('background') or '未提及'));doc.add_heading('专家点评',2)
@@ -187,6 +194,30 @@ def valuation_xlsx(method, assumptions, result):
     out=io.BytesIO();wb.save(out);return out.getvalue()
 
 
+def _slide_pages(sections, maximum=200):
+ """Paginate every paragraph; reject excessive decks instead of truncating."""
+ import unicodedata
+ pages=[]
+ for heading,items in sections:
+  page=[];weight=0;part=1
+  for item in items:
+   chunks=[];chunk="";width=0
+   for char in item:
+    cost=2 if unicodedata.east_asian_width(char) in ("W","F") else 1
+    if width+cost>100 and chunk:
+     chunks.append(chunk);chunk="";width=0
+    chunk+=char;width+=cost
+   if chunk:chunks.append(chunk)
+   for chunk in chunks:
+    if weight>=8:
+     pages.append((heading if part==1 else heading+"（续"+str(part)+"）",page))
+     if len(pages)>maximum:raise ValueError("正文需超过200页；请拆分交付物。未生成截断的PPT。")
+     page=[];weight=0;part+=1
+    page.append(chunk);weight+=1
+  if page or not items:pages.append((heading if part==1 else heading+"（续"+str(part)+"）",page))
+  if len(pages)>maximum:raise ValueError("正文需超过200页；请拆分交付物。未生成截断的PPT。")
+ return pages
+
 def pptx_report(record):
  from pptx import Presentation
  from pptx.util import Inches,Pt
@@ -214,15 +245,16 @@ def pptx_report(record):
  for raw in body.replace('\r','').split('\n'):
   line=raw.strip()
   if line.startswith('#'):
-   if lines:sections.append((heading,lines))
-   heading=line.lstrip('# ').strip()[:120] or '内容';lines=[]
+   if lines or sections or heading!='核心内容':sections.append((heading,lines))
+   heading=line.lstrip('# ').strip() or '内容';lines=[]
   elif line:lines.append(line)
- if lines:sections.append((heading,lines))
- if not sections:sections=[('核心内容',[body[:2000] or '暂无正文'])]
- for index,(head,items) in enumerate(sections[:40],1):
+ if lines or heading!='核心内容':sections.append((heading,lines))
+ if not sections:sections=[('核心内容',[body or '暂无正文'])]
+ pages=_slide_pages(sections)
+ for index,(head,items) in enumerate(pages,1):
   slide=prs.slides.add_slide(prs.slide_layouts[6]);slide.background.fill.solid();slide.background.fill.fore_color.rgb=RGBColor(255,255,255);add_title(slide,head,'证据与结论需回到来源材料复核')
   box=slide.shapes.add_textbox(Inches(.9),Inches(1.55),Inches(11.6),Inches(5.25));tf=box.text_frame;tf.clear();tf.word_wrap=True
-  for j,line in enumerate(items[:18]):
+  for j,line in enumerate(items):
     p=tf.paragraphs[0] if j==0 else tf.add_paragraph();text=line;level=0;bullet=False
     if text.startswith('➢'):level=2;bullet=True;text=text[1:].strip()
     elif text.startswith('o '):level=1;bullet=True;text=text[2:].strip()
@@ -230,8 +262,6 @@ def pptx_report(record):
     p.text=text;p.level=level;p.font.name='Arial';p.font.size=Pt(16 if level==0 else 14);p.font.color.rgb=RGBColor(36,51,69);p.space_after=Pt(10);p.text=('• '+text) if bullet and not level else text
 
   add_footer(slide,index+1)
- if len(sections)>40:
-  slide=prs.slides.add_slide(prs.slide_layouts[6]);add_title(slide,'附录内容已截断','正文超过40个章节，完整内容仍在原始交付记录中。');add_footer(slide,41)
  out=io.BytesIO();prs.save(out);return out.getvalue()
 
 def docx_report(record):
