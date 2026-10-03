@@ -246,6 +246,8 @@ async function main() {
   const savedModel=await api('deliverables',{title:'Synthetic saved valuation model',project_id:alpha.id,kind:'自定义',method:'net_income',assumptions,result:modelResult});
   const source = await api('documents/' + doc.id);
   const answer = '# Synthetic heading\n\n**Bold evidence** [S1]\n\n- First item\n- Second item\n\n| Metric | Value |\n| --- | --- |\n| Synthetic growth | 17% |\n\n<img src=x onerror="window.__cdpUnsafe=1">\n<script>window.__cdpUnsafe=1</script>\n<iframe src="https://invalid.example/"></iframe>';
+  const nohitQuestion='请通读这份材料，概括主要结论，并列出需要核实的问题。';
+  const nohitWarning='关键词未命中；已按你选定的范围使用原文节选进行模型分析，未读部分仍需核实。';
   chrome = start(chromeExecutable, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-extensions', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + debugPort, '--user-data-dir=' + path.join(temp, 'chrome-profile'), 'about:blank']);
   const targets = await until(() => json('http://127.0.0.1:' + debugPort + '/json/list'), 'new Chrome CDP');
   cdp = await CDP.connect(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
@@ -293,6 +295,8 @@ async function main() {
     if (['/api/ask', '/api/agent'].includes(url.pathname)) {
       const body = JSON.parse(event.request.postData || '{}'),operationId=Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workos-request-id')?.[1]; requests.push({ path: url.pathname, method: event.request.method, body, operationId });
       const result = url.pathname === '/api/ask' ? { answer, mode: 'model', elapsed_ms: 1, citations: [{ document_id: doc.id, id: source.chunks[0].id, ordinal: source.chunks[0].ordinal, title: doc.title, quote }] } : { answer, steps: [] };
+      // This is a synthetic presentation fixture; backend tests verify actual no-hit provider dispatch.
+      if(url.pathname==='/api/ask'&&body.question===nohitQuestion)Object.assign(result,{answer:'已阅读选定材料的原文节选。合成结论：收入增长17%；仍需核实定义和统计期间。[S1]',model:'DeepSeek V4.1 Flash',model_called:true,retrieval_basis:'selected_excerpt',warning:nohitWarning});
       return cdp.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json; charset=utf-8' }], body: Buffer.from(JSON.stringify(result)).toString('base64') });
     }
     if (/^\/api\/(meeting-draft|meeting-ai|meeting-expert|valuation-parse|ai|dsh|model\/parse-assumptions)/.test(url.pathname) && event.request.method !== 'GET') {
@@ -706,6 +710,20 @@ async function main() {
     await route('deliverables');const previous=await cdp.evaluate("document.querySelector('#deliverable-body').value"),before=requests.length;
     await fill('#deliverable-body','Synthetic editable paragraph');await enter('#deliverable-body');await cdp.send('Input.insertText',{text:'Synthetic next paragraph'});assert(await cdp.evaluate("document.querySelector('#deliverable-body').value==='Synthetic editable paragraph\\nSynthetic next paragraph'"),'Document editor Enter did not insert newline');assert(requests.length===before,'Document editor Enter sent a model request');
     await fill('#deliverable-body',previous);await click('#deliverable-form button[type=submit]');await until(()=>cdp.evaluate("document.querySelector('#deliverable-save-state').textContent.includes('已保存')"),'restored synthetic editor body');
+  });
+  await check('no-hit model analysis shows actual identity selected excerpts and scoped citation without saving records', async () => {
+    await route('research');await select('#research-intent','ask');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');await select('#ask-mode','deepseek');await select('#local-model','deepseek-v4.1-flash');
+    const before=await api('state'),requestsBefore=requests.filter(item=>item.path==='/api/ask').length;await fill('#question-input',nohitQuestion);await enter('#question-input');
+    await until(()=>requests.filter(item=>item.path==='/api/ask').length===requestsBefore+1,'synthetic no-hit model request');await until(()=>cdp.evaluate('!document.querySelector("#question-input").disabled&&document.querySelector(".answer-card .question-history")?.textContent==='+q(nohitQuestion)),'synthetic selected-excerpt answer');
+    const sent=requests.filter(item=>item.path==='/api/ask').at(-1);assert(sent.body.mode==='deepseek'&&sent.body.model_id==='deepseek-v4.1-flash'&&sent.body.project_id===alpha.id&&JSON.stringify(sent.body.document_ids)===JSON.stringify([doc.id]),'No-hit analysis changed the chosen engine/model or selected source scope');
+    const shown=await cdp.evaluate("({heading:document.querySelector('.answer-card .answer-heading').textContent,warning:document.querySelector('.answer-card .banner')?.textContent||'',text:document.querySelector('.answer-card').textContent})");
+    assert(shown.heading.includes('DeepSeek')&&!/本地证据|非大模型/.test(shown.heading)&&shown.warning.includes(nohitWarning)&&shown.warning.length<180,'Model identity or compact no-hit explanation is misleading: '+JSON.stringify(shown));
+    assert(shown.text.includes('原文节选')&&shown.text.includes('[S1]')&&!shown.text.includes('未向外部模型发出请求'),'Synthetic model analysis was replaced by a local no-hit response');
+    const after=await api('state');assert(after.notes.length===before.notes.length&&after.deliverables.length===before.deliverables.length,'Ask mode automatically saved a note or deliverable');
+    await click('.answer-card .citation');
+    try {await until(()=>cdp.evaluate('document.querySelector("#document-dialog").open&&document.querySelector("#document-title").textContent==='+q(doc.title)),'selected-excerpt citation source');assert(await cdp.evaluate('document.querySelector("#document-dialog").textContent.includes('+q(quote)+')&&!!document.querySelector(".document-chunk.highlight")'),'No-hit citation did not locate the selected original source');}
+    finally {await cdp.evaluate("document.querySelector('#document-dialog').close()");}
+    await cdp.evaluate("document.querySelector('.answer-card').scrollIntoView({block:'start',behavior:'instant'})");await screenshot('ask-selected-excerpt-1280');
   });
   await check('mobile 375px viewport has no document horizontal overflow', async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });

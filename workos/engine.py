@@ -456,7 +456,7 @@ def _quote(text: str, groups: list[str], maximum: int = 900) -> str:
 
 
 def _question(question: str) -> str:
-    question = _text(question, "问题", maximum=3000).strip()
+    question = _text(question, "问题", maximum=4000).strip()
     if not question:
         raise ValueError("问题不能为空。")
     return question
@@ -535,6 +535,53 @@ def retrieve(question: str, documents: list, limit: int = 6) -> list:
             seen.add(key)
         if len(result) == limit:
             break
+    return result
+
+
+def selected_context_citations(documents: list, max_chars: int = 24000) -> list:
+    """Bounded selected-source context for model reading, not relevance matches."""
+    if not isinstance(documents, list) or len(documents) > 80:
+        raise ValueError("待分析资料必须是最多80份资料的列表。")
+    if type(max_chars) is not int or not 80 <= max_chars <= 24000:
+        raise ValueError("资料节选上限必须是80至24000个字符。")
+    share = max_chars // max(1, len(documents))
+    result, seen = [], set()
+    for document in documents:
+        if not isinstance(document, dict):
+            raise ValueError("资料记录必须是对象。")
+        document_id = document.get("id")
+        if not isinstance(document_id, str) or not document_id:
+            continue
+        title = document.get("title") or "未命名资料"
+        if not isinstance(title, str):
+            raise ValueError("资料标题必须是文本。")
+        chunks = document.get("chunks") or chunk_text(document.get("content", ""))
+        if not isinstance(chunks, list):
+            raise ValueError("资料分段必须是列表。")
+        readable = [(index, chunk) for index, chunk in enumerate(chunks)
+                    if isinstance(chunk, dict) and isinstance(chunk.get("text"), str)
+                    and chunk["text"].strip()]
+        count = min(len(readable), max(1, (share + 899) // 900))
+        if not count:
+            continue
+        positions = [round(index * (len(readable) - 1) / (count - 1))
+                     for index in range(count)] if count > 1 else [0]
+        quote_limit = min(900, share // count)
+        for position in positions:
+            chunk_index, chunk = readable[position]
+            quote = chunk["text"].strip()[:quote_limit].strip()
+            if not quote or (document_id, quote) in seen:
+                continue
+            seen.add((document_id, quote))
+            ordinal = chunk.get("ordinal", chunk_index + 1)
+            if type(ordinal) is not int or ordinal < 1:
+                ordinal = chunk_index + 1
+            page = chunk.get("page")
+            if page is not None and (type(page) is not int or page < 1):
+                page = None
+            chunk_id = chunk.get("id") or f"paragraph-{ordinal}"
+            result.append({"id": f"{document_id}:{chunk_id}", "document_id": document_id,
+                           "title": title, "page": page, "ordinal": ordinal, "quote": quote})
     return result
 
 

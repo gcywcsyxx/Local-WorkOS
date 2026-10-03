@@ -4,6 +4,14 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.6.1 selected-model ask on lexical misses, 2026-10-04
+
+- Twelve real loopback HTTP regressions use synthetic provider responses: all four provider paths are invoked once on a lexical miss or empty text, keep the selected model, report actual model_called/retrieval_basis, and reject nonexistent source tags. Scope, memory, cross-workspace, model allowlists, CSRF, cancellation and no automatic save remain enforced. Generic requests longer than3000 characters now follow the documented4000-character limit.
+- Eight pure context groups verify fair inclusion of late selected documents, deterministic head/middle/tail sampling, the24000-character total and900-character quote bounds, real quote/chunk/page/ordinal identity, empty text, invalid identities, deduplication and unchanged inputs. Strict local keyword retrieval stays separate from model reading.
+- Chrome adds a no-hit model-response display/payload check: actual model identity, brief explanation and coverage warning, exact selected scope, no saved records and source opening. Browser/provider fixture responses are synthetic; these checks do not certify factual accuracy.
+
+- A live source-only synthetic DeepSeek V4.1 Flash canary exercises a genuine lexical miss through the existing compatible bridge and returns an84-character, two-sentence Chinese answer with a real source tag. No runtime business records or personal sources are used. This validates dispatch and brief output for this case, not general factual quality.
+
 ### 1.6.0 Enter-send and stopping AI work, 2026-10-04
 
 - Real HTTP and blocked-provider fixtures cover cancel before arrival/acknowledgement, queued/running durable jobs, late compatible-model output, DSH cancellation, agent partial commits, atomic meeting save, edited-meeting protection, cancel-vs-save ordering, terminal persistence after restart, workspace/CSRF/auth and bounded registries. No production model calls are used.
