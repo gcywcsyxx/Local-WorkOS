@@ -4,6 +4,14 @@
 
 A local-first research and project workspace with evidence-grounded retrieval, meeting action review, deterministic return modelling and editable deliverables.
 
+## 产品与开发交接 / Product and AI handoff
+
+- [当前PRD：已实现、边界、优先级与验收](<docs/PRD.md>)
+- [AI工程交接：架构、隔离测试与发布](<docs/AI_HANDOFF.md>)
+- [完整开发测试依赖](<requirements-development.txt>)
+
+部分下文为历史说明；最新功能与安全契约以上述PRD和交接指南为准。
+
 ## 启动 / Run
 
 核心仅需 Python 3.11+，无 Node、CDN 或前端构建依赖。要使用 GPT/DSH，需本机已有登录的 DSH CLI；WorkOS 不会复制 OAuth 密钥。
@@ -14,7 +22,7 @@ python launch.py
 
 打开 `http://127.0.0.1:18866`。重复启动复用同一平台实例；停止使用 `python launch.py --stop`。仅绑定本机回环地址；Windows 使用独占端口，不覆盖其他应用的监听。
 
-Windows 可用 [安装辅助脚本](<tools/install.ps1>) 部署并建立开始菜单入口；本机启动快捷方式可选开机自启。公开默认仍只绑定回环地址；公网访问必须先配置 Cloudflare Access，不能直接开放端口。
+Windows 可用 [安装辅助脚本](<tools/install.ps1>) 部署并建立开始菜单入口；本机启动快捷方式可选开机自启。公开默认仍只绑定回环地址；公网必须使用受保护的独立隧道：支持内置账号密码模式或经配置的Cloudflare Access模式，不能直接开放端口。参见 [密码公网部署](<docs/password-public.md>)。
 
 可选Word导出依赖：
 
