@@ -442,6 +442,32 @@ class ServerTests(unittest.TestCase):
         finally:
             self.app.public_origin=''
 
+    def test_signed_access_token_protects_public_workspace_over_http(self):
+        try:
+            import jwt
+            from cryptography.hazmat.primitives.asymmetric import rsa
+        except ImportError:self.skipTest("Optional public-auth dependencies unavailable")
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from workos.access_auth import AccessValidator
+        key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+        client=Mock();client.get_signing_key_from_jwt.return_value=SimpleNamespace(key=key.public_key())
+        old=self.app.access_validator;self.app.access_validator=AccessValidator("synthetic-team","synthetic-aud",client)
+        self.app.public_origin="https://workos.example.com"
+        try:
+            headers={"Host":"workos.example.com","Origin":"https://workos.example.com"}
+            self.assertEqual(self.request("GET","/api/state",headers=headers)[0],403)
+            now=int(__import__("time").time())
+            token=jwt.encode({"sub":"synthetic-user","iss":"https://synthetic-team.cloudflareaccess.com","aud":["synthetic-aud"],"iat":now-1,"exp":now+60},key,algorithm="RS256",headers={"kid":"synthetic-key"})
+            headers["Cf-Access-Jwt-Assertion"]=token
+            status,data=self.request("GET","/api/state",headers=headers)
+            self.assertEqual(status,200,data)
+            self.assertIn("projects",data)
+            self.assertEqual(self.request("POST","/api/projects",{"name":"Synthetic public write"},headers=headers,csrf=False)[0],403)
+            self.assertEqual(self.request("POST","/api/projects",{"name":"Synthetic authenticated write"},headers=headers)[0],201)
+        finally:
+            self.app.public_origin="";self.app.access_validator=old
+
     def test_export_pptx_endpoint(self):
         record=self.create('deliverables',{'title':'Synthetic PPT','body':'# Market\n• Market size 100.'})
         status,payload=self.request('GET','/api/export/'+record['id']+'?format=pptx')
