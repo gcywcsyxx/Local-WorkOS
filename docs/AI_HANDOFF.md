@@ -67,7 +67,7 @@ Use synthetic data and mocked model responses. If the port is occupied, choose a
 4. The eight-tool assistant does not yet directly execute every valuation/minutes/export step.
 5. Sync has no live bidirectional merge, periodic pull or stale-file reconciliation; last_sync is a local write time, not proof of cloud upload.
 6. A full IC story, templates, three-statement integration, debt tranches/interim dividends/dilution are not implied by an editable file export.
-7. Global paste currently exempts the meeting transcript field but can intercept other text inputs; PRD prioritizes fixing that boundary.
+7. Global paste now preserves all editable fields. Keep the browser regression: normal input/textarea/contenteditable paste must not create a document. The research page has one composer with explicit ask/action modes, not duplicated forms.
 
 ## Feature modification patterns
 - Data additions: update [Store](<../workos/store.py>) schema/defaults/validation and test older records plus backup/restore. Meeting structured fields must have valid dimensions/indices; changing only summary intentionally invalidates stale structures.

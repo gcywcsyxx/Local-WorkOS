@@ -18,3 +18,12 @@ The repository workflow runs the synthetic unit suite on Windows and Ubuntu with
 ## Not claimed
 
 A synthetic canary was sent through the integrated DSH → GPT-6 Luna route and returned the expected text; the unit suite uses a mocked model adapter and never sends fixtures to a live model. No broad answer-quality benchmark is claimed. No OCR, email/chat integrations, recordings, cloud sync, complete LBO or enterprise deployment tests are claimed. Evidence attribution does not validate the underlying source's truth.
+## Research-first UI regression (no Playwright dependency)
+
+```shell
+node tests/test_markdown.cjs
+node tests/browser_auth_client.cjs
+node tests/browser_research_cdp.cjs
+```
+
+The Chrome/CDP test starts its own temporary Python instance and Chrome profile, seeds synthetic records, intercepts ask/agent responses, never calls real models, and stops only its created process trees. Use Node24 built-in fetch/WebSocket, Python in PATH or WORKOS_TEST_PYTHON, and Chrome installed or WORKOS_TEST_CHROME. It verifies merged home/project navigation, one composer/drafts/scope, readable Markdown/inert unsafe HTML, citation navigation, editable paste and narrow-screen overflow. Never substitute production 18866 or an existing private Chrome profile.

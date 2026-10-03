@@ -542,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
     mime='application/pdf' if fmt=='pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     return self.respond(payload,mime=mime,filename=stem+'.'+fmt)
    if path.startswith('/api/'):raise KeyError('接口不存在')
-   static={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/valuation.js':'valuation.js','/style.css':'style.css','/icon.svg':'icon.svg'}
+   static={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/markdown.js':'markdown.js','/valuation.js':'valuation.js','/style.css':'style.css','/icon.svg':'icon.svg'}
    if path=='/favicon.ico':return self.respond(b'',204,'image/x-icon')
    if path not in static:raise KeyError('页面不存在')
    file=ROOT/'web'/static[path]
