@@ -78,7 +78,7 @@ Use synthetic data and mocked model responses. If the port is occupied, choose a
 
 ## Authentication and privacy contracts
 Use [password deployment guide](<password-public.md>) for password mode and [Access guide](<cloudflare-access.md>) only when that mode is chosen.
-Keep authentication on all remote workspace APIs/downloads, session CSRF, Host/Origin checks, nonce/cookie/IP binding, login rate limits and local-only setup. Forwarded localhost must not become an anonymous bypass. Passwords remain salted hashes, session IDs hashed and local; never export them into backups, mirrors or source.
+Keep authentication on all remote workspace APIs/downloads, session CSRF, Host/Origin checks, nonce/cookie binding, fresh-before-submit challenges and IP-based throttling (not strict IP binding), login rate limits and local-only setup. Forwarded localhost must not become an anonymous bypass. Passwords remain salted hashes, session IDs hashed and local; never export them into backups, mirrors or source.
 The source default closes public access; a specific deployment opts into HTTPS password mode. Single account is not enterprise RBAC. Localhost bypass is deliberate for the trusted host owner.
 Keep kind=memory out of every model call. Never extract browser cookies or place tokens into docs, commands or repository remotes. Use only existing saved credentials; do not open auth popups automatically.
 

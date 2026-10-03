@@ -146,7 +146,7 @@
 - 当前运行 `WORKOS_PUBLIC_AUTH_MODE=password`；legacy Access mode 可选，但不等于当前部署采用 Access。
 - 用户 `workos-user`；密码只在主机管理；仅存随机盐PBKDF2-SHA256（600000次）哈希。登录会话标识哈希本机存储，不能同步至OneDrive/Git。
 - Cookie 为 Secure / HttpOnly / host-only；不记住12小时、记住7天，并跨应用重启保留；注销/重设密码使会话失效。
-- 登录有nonce、cookie和来源约束、失败限流；公网全部数据API/下载需登录，写入仍校验每session CSRF；本机可信请求不需要公网登录。
+- 登录提交前自动获取新nonce/cookie；挑战失效可自动恢复一次，明确提示Cookie阻止；换网/IPv4/IPv6不硬性绑定挑战IP（IP仅用于限流），仍有来源约束、失败限流；公网全部数据API/下载需登录，写入仍校验每session CSRF；本机可信请求不需要公网登录。
 - `/auth/setup` 仅本机、需本机CSRF；不能通过公网初始化/重设密码，包括Host被改写为localhost的转发请求。
 - 不记录密码/token/原始鉴权header；不读取Chrome cookie当作Cloudflare或GitHub授权。
 - 不触碰共享dsh tunnel；独立WorkOS连接器重复启动应幂等；启动设置不包含明文密码。

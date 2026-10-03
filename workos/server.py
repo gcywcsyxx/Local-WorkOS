@@ -391,6 +391,11 @@ class Handler(BaseHTTPRequestHandler):
   if path=='/auth/setup' and self.remote_request:raise PermissionError('密码初始化只允许在本机进行')
   if self.remote_request and self.app.public_auth_mode!='password':raise PermissionError('账号密码登录未启用')
   if path=='/auth/ui.js':return self.respond((ROOT/'web'/'auth.js').read_bytes(),mime='application/javascript; charset=utf-8')
+  if path=='/auth/challenge':
+   if self.app.public_auth_mode!='password':raise PermissionError('账号密码登录未启用')
+   nonce=self.app.password_auth.issue_challenge(self.auth_peer())
+   self.response_headers={'Set-Cookie':self.app.password_auth.challenge_cookie(nonce)}
+   return self.respond({'csrf':nonce})
   import html
   setup=path=='/auth/setup'
   if setup:nonce=self.app.csrf
@@ -453,11 +458,13 @@ class Handler(BaseHTTPRequestHandler):
   if filename:self.send_header('Content-Disposition',"attachment; filename=export; filename*=UTF-8''"+urllib.parse.quote(filename))
   self.end_headers();self.wfile.write(raw)
  def handle_error(self,exc):
-  from .password_auth import LoginRequired,TooManyLogins
+  from .password_auth import LoginRequired,TooManyLogins,LoginChallengeExpired
   if isinstance(exc,LoginRequired):
    if self.command=='GET' and not urllib.parse.urlsplit(self.path).path.startswith('/api/'):
     self.response_headers={'Location':'/auth/login'};return self.respond('',303,'text/plain; charset=utf-8')
    return self.respond({'error':'请先登录WorkOS'},401)
+  if isinstance(exc,LoginChallengeExpired):
+   return self.respond({'error':'登录挑战已过期','code':'login_challenge_expired'},409)
   if isinstance(exc,TooManyLogins):
    self.response_headers={'Retry-After':'600'};return self.respond({'error':str(exc)},429)
   if isinstance(exc,PermissionError):self.respond({'error':str(exc)},403)
@@ -469,7 +476,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   try:
    url=urllib.parse.urlsplit(self.path);path=url.path;query=urllib.parse.parse_qs(url.query)
-   auth_page=path in ('/auth/login','/auth/setup','/auth/ui.js')
+   auth_page=path in ('/auth/login','/auth/setup','/auth/ui.js','/auth/challenge')
    self.headers_ok(authenticate=not auth_page)
    if auth_page:return self.auth_get(path)
    mode=self.workspace();store=self.app.stores[mode]

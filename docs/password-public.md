@@ -17,7 +17,7 @@ New installations default to `workos-user`. Existing configured accounts retain 
 Password hashes and hashed session identifiers are under the local application data directory, separate from OneDrive mirrors and repository source. No plaintext password or raw session token is persisted. Change/reset from the host computer invalidates existing sessions.
 
 ## Remote sessions
-All remote workspace API and download routes require an authenticated session. Anonymous browser navigation redirects to `/auth/login`; anonymous APIs return 401. Sessions use Secure, HttpOnly, host-only cookies. Remembered sessions last 7 days and survive application restarts; unremembered sessions last 12 hours. Each session has its own CSRF token. Login is nonce/cookie-bound, same-origin HTTPS-only, and rate-limited. Settings offers remote logout.
+All remote workspace API and download routes require an authenticated session. Anonymous browser navigation redirects to `/auth/login`; anonymous APIs return 401. Sessions use Secure, HttpOnly, host-only cookies. Remembered sessions last 7 days and survive application restarts; unremembered sessions last 12 hours. Each session has its own CSRF token. Login is nonce/cookie-bound, same-origin HTTPS-only, and rate-limited. The browser fetches a fresh no-store `/auth/challenge` before submitting and retries once on a structured 409 challenge-expired error. Changing IPv4/IPv6/VPN addresses does not invalidate a valid cookie/nonce; IP is used for throttling, not identity binding. Blocked cookies produce explicit guidance rather than an endless refresh loop. Settings offers remote logout.
 
 ## Verify
 - HTTPS `/` must redirect anonymous visitors to the login page.

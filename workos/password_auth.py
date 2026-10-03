@@ -7,6 +7,7 @@ from http.cookies import SimpleCookie,CookieError
 SESSION_COOKIE="__Host-workos-session"
 CHALLENGE_COOKIE="__Host-workos-login"
 class LoginRequired(PermissionError):pass
+class LoginChallengeExpired(PermissionError):pass
 class TooManyLogins(PermissionError):pass
 
 def cookie_value(header,name):
@@ -64,9 +65,9 @@ class PasswordAuth:
     def issue_challenge(self,ip):
         nonce=secrets.token_urlsafe(32);now=self.clock()
         with self.lock:
-            self.challenges={key:value for key,value in self.challenges.items() if value[0]>now}
+            self.challenges={key:value for key,value in self.challenges.items() if value>now}
             if len(self.challenges)>=1024:self.challenges.pop(next(iter(self.challenges)))
-            self.challenges[nonce]=(now+300,str(ip)[:64])
+            self.challenges[nonce]=now+300
         return nonce
     def login(self,username,password,ip,nonce,cookie_nonce,remember=False):
         if not self.configured:raise PermissionError("账号尚未初始化，请先在本机设置密码")
@@ -76,7 +77,9 @@ class PasswordAuth:
             self.global_failures=[t for t in self.global_failures if t>now-600]
             if len(self.failures.get(ip,[]))>=5 or len(self.global_failures)>=50:raise TooManyLogins("登录尝试过多，请10分钟后重试")
             challenge=self.challenges.get(nonce) if isinstance(nonce,str) else None
-            if not challenge or challenge[0]<=now or challenge[1]!=ip or not isinstance(cookie_nonce,str) or not hmac.compare_digest(nonce,cookie_nonce):raise PermissionError("登录会话已过期，请刷新登录页")
+            # A valid same-origin double-submit cookie remains valid across mobile/VPN IP changes.
+            # Request IP still participates in per-IP and account-wide brute-force throttling.
+            if not challenge or challenge<=now or not isinstance(cookie_nonce,str) or not hmac.compare_digest(nonce,cookie_nonce):raise LoginChallengeExpired("登录挑战已过期，请重新获取登录挑战")
             if not isinstance(password,str) or len(password)>128:raise PermissionError("用户名或密码不正确")
             derived=hashlib.pbkdf2_hmac("sha256",password.encode(),base64.b64decode(self.account["salt"]),self.iterations)
             correct=hmac.compare_digest(derived,base64.b64decode(self.account["digest"])) and username==self.username

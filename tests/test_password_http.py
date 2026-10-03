@@ -69,9 +69,33 @@ class PasswordHttpTests(unittest.TestCase):
         self.assertEqual(self.request("/api/state",cookie=cookie)[0],401)
     def test_bad_password_and_login_nonce_are_rejected(self):
         self.setup_password();self.assertEqual(self.login("Wrong-Synthetic-Password!")[0],403)
-        self.assertEqual(self.request("/auth/login","POST",{"username":"workos-user","password":PASSWORD})[0],403)
+        self.assertEqual(self.request("/auth/login","POST",{"username":"workos-user","password":PASSWORD})[0],409)
         for i in range(4):self.assertEqual(self.login("Wrong-Synthetic-Password!")[0],403)
         self.assertEqual(self.login()[0],429)
+    def test_fresh_challenge_recovers_stale_page_and_restart(self):
+        self.setup_password()
+        self.app.password_auth.clock=lambda:1000000.
+        status,page,headers=self.request("/auth/login");self.assertEqual(status,200)
+        old=re.search(rb'id="csrf" value="([^"]+)"',page).group(1).decode()
+        old_cookie=headers["Set-Cookie"].split(";")[0]
+        self.app.password_auth.clock=lambda:1000301.
+        status,raw,_=self.request("/auth/login","POST",{"username":"workos-user","password":PASSWORD},cookie=old_cookie,csrf=old)
+        self.assertEqual(status,409);self.assertEqual(json.loads(raw)["code"],"login_challenge_expired")
+        self.app.password_auth=PasswordAuth(self.app.password_auth.directory)
+        status,raw,headers=self.request("/auth/challenge",extra={"Cf-Connecting-IP":"2001:db8::1"})
+        self.assertEqual(status,200);self.assertEqual(headers["Cache-Control"],"no-store")
+        nonce=json.loads(raw)["csrf"];cookie=headers["Set-Cookie"].split(";")[0]
+        status,raw,headers=self.request("/auth/login","POST",{"username":"workos-user","password":PASSWORD},cookie=cookie,csrf=nonce,extra={"Cf-Connecting-IP":"198.51.100.1"})
+        self.assertEqual(status,200,raw)
+        self.assertEqual(self.request("/api/state",cookie=headers["Set-Cookie"].split(";")[0])[0],200)
+    def test_challenge_does_not_bypass_cookie_or_same_origin(self):
+        self.setup_password()
+        status,raw,headers=self.request("/auth/challenge");self.assertEqual(status,200)
+        nonce=json.loads(raw)["csrf"]
+        self.assertEqual(self.request("/auth/login","POST",{"username":"workos-user","password":PASSWORD},csrf=nonce)[0],409)
+        self.assertEqual(self.request("/auth/challenge",extra={"Origin":"https://evil.invalid"})[0],403)
+        self.assertEqual(self.request("/api/state")[0],401)
+
     def test_cross_site_login_and_write_are_rejected(self):
         self.setup_password()
         self.assertEqual(self.request("/auth/login","POST",{"username":"workos-user","password":PASSWORD},extra={"Origin":"https://evil.invalid"})[0],403)

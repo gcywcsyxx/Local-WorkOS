@@ -1,6 +1,6 @@
 import json,tempfile,unittest
 from pathlib import Path
-from workos.password_auth import PasswordAuth,TooManyLogins,SESSION_COOKIE
+from workos.password_auth import PasswordAuth,TooManyLogins,SESSION_COOKIE,LoginChallengeExpired
 
 PASSWORD="Synthetic-Password-2026!"
 class PasswordAuthTests(unittest.TestCase):
@@ -32,10 +32,22 @@ class PasswordAuthTests(unittest.TestCase):
         self.auth.configure_password(PASSWORD);token=self.login()
         self.auth.configure_password("Another-Synthetic-Password!")
         self.assertIsNone(self.auth.get_session(SESSION_COOKIE+"="+token))
-    def test_nonce_cookie_and_ip_must_match(self):
+    def test_nonce_and_cookie_must_match(self):
         self.auth.configure_password(PASSWORD);nonce=self.auth.issue_challenge("ip")
-        for ip,token,cookie in (("other",nonce,nonce),("ip",nonce,"bad"),("ip","unknown","unknown")):
+        for ip,token,cookie in (("ip",nonce,"bad"),("ip","unknown","unknown")):
             with self.assertRaises(PermissionError):self.auth.login("workos-user",PASSWORD,ip,token,cookie)
+    def test_valid_cookie_survives_mobile_or_vpn_ip_change(self):
+        self.auth.configure_password(PASSWORD);nonce=self.auth.issue_challenge("2001:db8::1")
+        token,_=self.auth.login("workos-user",PASSWORD,"198.51.100.1",nonce,nonce)
+        self.assertIsNotNone(self.auth.get_session(SESSION_COOKIE+"="+token))
+    def test_expired_challenge_refresh_recovers_without_changing_password(self):
+        self.auth.configure_password(PASSWORD);nonce=self.auth.issue_challenge("ip")
+        self.now+=301
+        with self.assertRaises(LoginChallengeExpired):self.auth.login("workos-user",PASSWORD,"ip",nonce,nonce)
+        fresh=self.auth.issue_challenge("ip")
+        token,_=self.auth.login("workos-user",PASSWORD,"ip",fresh,fresh)
+        self.assertIsNotNone(self.auth.get_session(SESSION_COOKIE+"="+token))
+
     def test_bruteforce_is_limited(self):
         self.auth.configure_password(PASSWORD)
         for i in range(5):
