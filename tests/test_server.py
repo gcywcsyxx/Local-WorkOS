@@ -21,6 +21,7 @@ class ServerTests(unittest.TestCase):
         # Prevent discovery of the real workstation memory root altogether.
         with patch('workos.server.find_root', return_value=None):
             self.app = Application(Path(self.tmp.name) / 'data', port=0)
+            self.app.public_auth_mode='access'
         self.addCleanup(self.close_stores)
         self.httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         self.httpd.daemon_threads = True

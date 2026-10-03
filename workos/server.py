@@ -93,6 +93,10 @@ class Application:
   self.public_origin=public_origin
   from .access_auth import AccessValidator
   self.access_validator=AccessValidator(os.environ.get('WORKOS_ACCESS_TEAM',''),os.environ.get('WORKOS_ACCESS_AUD',''))
+  self.public_auth_mode=os.environ.get('WORKOS_PUBLIC_AUTH_MODE','access').strip().lower()
+  if self.public_auth_mode not in ('access','password'):raise ValueError('无效的公网认证方式')
+  from .password_auth import PasswordAuth
+  self.password_auth=PasswordAuth(self.data_dir/'authentication')
   self.memory_root=find_root(ROOT)
   self.ai={'base_url':'','model':'','api_key':''}
   self.ai_lock=threading.Lock()
@@ -358,7 +362,8 @@ class Handler(BaseHTTPRequestHandler):
   logging.info('%s %s',self.command,self.path.split('?')[0])
  @property
  def app(self):return self.server.app
- def headers_ok(self,write=False):
+ def headers_ok(self,write=False,authenticate=True):
+  self.password_session=None
   host=self.headers.get('Host','')
   accepted={f'127.0.0.1:{self.app.port}',f'localhost:{self.app.port}'}
   public=self.app.public_origin
@@ -371,8 +376,54 @@ class Handler(BaseHTTPRequestHandler):
   if origin and origin not in allowed_origins:raise PermissionError('不允许跨站请求')
   proxied=bool(self.headers.get('Cf-Connecting-IP') or self.headers.get('Cf-Ray'))
   if proxied and not public:raise PermissionError('公网入口尚未启用')
-  if host not in local_hosts or proxied:self.app.access_validator.verify(self.headers.get('Cf-Access-Jwt-Assertion',''))
-  if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),self.app.csrf):raise PermissionError('会话校验失败，请刷新页面')
+  self.remote_request=host not in local_hosts or proxied
+  if self.remote_request and authenticate:
+   if self.app.public_auth_mode=='password':
+    from .password_auth import LoginRequired
+    self.password_session=self.app.password_auth.get_session(self.headers.get('Cookie',''))
+    if not self.password_session:raise LoginRequired('请先登录WorkOS')
+   else:self.app.access_validator.verify(self.headers.get('Cf-Access-Jwt-Assertion',''))
+  expected_csrf=self.password_session['csrf'] if self.password_session else self.app.csrf
+  if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),expected_csrf):raise PermissionError('会话校验失败，请刷新页面')
+ def auth_peer(self):
+  return (self.headers.get('Cf-Connecting-IP') or self.client_address[0])[:64]
+ def auth_get(self,path):
+  if path=='/auth/setup' and self.remote_request:raise PermissionError('密码初始化只允许在本机进行')
+  if self.remote_request and self.app.public_auth_mode!='password':raise PermissionError('账号密码登录未启用')
+  if path=='/auth/ui.js':return self.respond((ROOT/'web'/'auth.js').read_bytes(),mime='application/javascript; charset=utf-8')
+  import html
+  setup=path=='/auth/setup'
+  if setup:nonce=self.app.csrf
+  else:
+   nonce=self.app.password_auth.issue_challenge(self.auth_peer())
+   self.response_headers={'Set-Cookie':self.app.password_auth.challenge_cookie(nonce)}
+  values={'__MODE__':'setup' if setup else 'login','__PUBLIC_URL__':self.app.public_origin or 'https://workos.example.com/','__NONCE__':nonce,'__HEADING__':'设置 WorkOS 新密码' if setup else '登录 WorkOS','__EXPLANATION__':'账号 workos-user。密码仅保存加盐哈希，请不要使用发在聊天中的密码。' if setup else ('输入账号密码即可进入工作区。' if self.app.password_auth.configured else '账号尚未初始化，请在这台电脑打开本机密码设置页。'),'__MIN_LENGTH__':'minlength="8"' if setup else '', '__AUTOCOMPLETE__':'new-password' if setup else 'current-password','__REMEMBER_HIDDEN__':'hidden' if setup else '', '__BUTTON__':'保存新密码' if setup else '登录','__FOOTNOTE__':'仅本机可设置或更改密码。' if setup else '登录会话受 HTTPS 和 HttpOnly Cookie 保护。'}
+  page=(ROOT/'web'/'login.html').read_text(encoding='utf-8')
+  for marker,value in values.items():page=page.replace(marker,html.escape(value,quote=True) if marker not in ('__MIN_LENGTH__','__REMEMBER_HIDDEN__') else value)
+  return self.respond(page,mime='text/html; charset=utf-8')
+ def auth_post(self,path):
+  self.headers_ok(authenticate=False)
+  if path=='/auth/logout':
+   self.headers_ok(write=True)
+   self.app.password_auth.logout(self.headers.get('Cookie',''))
+   self.response_headers={'Set-Cookie':self.app.password_auth.session_cookie('',0)}
+   return self.respond({'ok':True})
+  try:length=int(self.headers.get('Content-Length','0'))
+  except ValueError:raise ValueError('请求长度不正确')
+  if not 0<length<=8192:raise ValueError('登录请求超过限制')
+  if path=='/auth/setup':
+   if self.remote_request:raise PermissionError('密码初始化只允许在本机进行')
+   if not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),self.app.csrf):raise PermissionError('请刷新本机密码设置页')
+   body=self.json_body();self.app.password_auth.configure_password(body.get('password'))
+   return self.respond({'ok':True,'username':'workos-user'})
+  if self.app.public_auth_mode!='password':raise PermissionError('账号密码登录未启用')
+  if self.remote_request and self.headers.get('Origin')!=self.app.public_origin:raise PermissionError('登录请求必须来自本站HTTPS页面')
+  body=self.json_body()
+  from .password_auth import cookie_value,CHALLENGE_COOKIE
+  token,seconds=self.app.password_auth.login(body.get('username'),body.get('password'),self.auth_peer(),self.headers.get('X-CSRF-Token',''),cookie_value(self.headers.get('Cookie',''),CHALLENGE_COOKIE),body.get('remember') is True)
+  self.response_headers={'Set-Cookie':self.app.password_auth.session_cookie(token,seconds)}
+  return self.respond({'ok':True})
+
  def workspace(self):
   mode=self.headers.get('X-Workspace','personal')
   if mode not in ('personal','demo'):raise ValueError('工作区不存在')
@@ -394,6 +445,7 @@ class Handler(BaseHTTPRequestHandler):
   self.send_header('Content-Type',mime)
   self.send_header('Content-Length',str(len(raw)))
   self.send_header('Cache-Control','no-store')
+  for key,value in getattr(self,'response_headers',{}).items():self.send_header(key,value)
   self.send_header('X-Content-Type-Options','nosniff')
   self.send_header('Referrer-Policy','no-referrer')
   self.send_header('X-Frame-Options','DENY')
@@ -401,6 +453,13 @@ class Handler(BaseHTTPRequestHandler):
   if filename:self.send_header('Content-Disposition',"attachment; filename=export; filename*=UTF-8''"+urllib.parse.quote(filename))
   self.end_headers();self.wfile.write(raw)
  def handle_error(self,exc):
+  from .password_auth import LoginRequired,TooManyLogins
+  if isinstance(exc,LoginRequired):
+   if self.command=='GET' and not urllib.parse.urlsplit(self.path).path.startswith('/api/'):
+    self.response_headers={'Location':'/auth/login'};return self.respond('',303,'text/plain; charset=utf-8')
+   return self.respond({'error':'请先登录WorkOS'},401)
+  if isinstance(exc,TooManyLogins):
+   self.response_headers={'Retry-After':'600'};return self.respond({'error':str(exc)},429)
   if isinstance(exc,PermissionError):self.respond({'error':str(exc)},403)
   elif isinstance(exc,KeyError):self.respond({'error':'记录不存在'},404)
   elif isinstance(exc,ValueError):self.respond({'error':str(exc)},400)
@@ -409,16 +468,24 @@ class Handler(BaseHTTPRequestHandler):
    self.respond({'error':'内部处理失败，请查看本机日志；原始数据未自动删除'},500)
  def do_GET(self):
   try:
-   self.headers_ok()
-   mode=self.workspace();store=self.app.stores[mode]
    url=urllib.parse.urlsplit(self.path);path=url.path;query=urllib.parse.parse_qs(url.query)
-   if path=='/api/bootstrap':return self.respond(self.app.bootstrap(mode))
+   auth_page=path in ('/auth/login','/auth/setup','/auth/ui.js')
+   self.headers_ok(authenticate=not auth_page)
+   if auth_page:return self.auth_get(path)
+   mode=self.workspace();store=self.app.stores[mode]
+   if path=='/api/bootstrap':
+    boot=self.app.bootstrap(mode)
+    if self.password_session:boot['csrf']=self.password_session['csrf'];boot['auth']={'public_login':True,'username':'workos-user'}
+    return self.respond(boot)
    if path=='/api/agent/tools':
     from .agent import AGENT_TOOLS
     return self.respond({'tools':AGENT_TOOLS})
    if path=='/api/sync/status':return self.respond(self.app.sync_status)
    if path=='/api/state':return self.respond(store.state())
    if path=='/api/health':return self.respond({'app':'local-workos','version':__version__,'status':'ok'})
+   if path=='/api/public/status':
+    if self.remote_request:raise PermissionError('公网配置状态只允许本机读取')
+    return self.respond({'origin':self.app.public_origin,'auth_mode':self.app.public_auth_mode,'password_configured':self.app.password_auth.configured})
    if path=='/api/memory/scan':
     if mode!='personal':return self.respond({'files':[],'skipped':['演示区不会扫描个人记忆'],'root_available':False})
     return self.respond(scan(self.app.memory_root))
@@ -479,8 +546,10 @@ class Handler(BaseHTTPRequestHandler):
  def do_DELETE(self):self.mutate('DELETE')
  def mutate(self,method):
   try:
+   path=urllib.parse.urlsplit(self.path).path
+   if path in ('/auth/login','/auth/setup','/auth/logout') and method=='POST':return self.auth_post(path)
    self.headers_ok(write=True)
-   mode=self.workspace();store=self.app.stores[mode];path=urllib.parse.urlsplit(self.path).path
+   mode=self.workspace();store=self.app.stores[mode]
    body=self.json_body() if method!='DELETE' else {}
    if method=='POST':
     if path=='/api/upload':

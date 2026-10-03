@@ -27,6 +27,18 @@ def healthy():
  try:return request('/api/health').get('app')=='local-workos'
  except (OSError,ValueError):return False
 
+def configure_saved_env(env):
+ """Load only WorkOS-specific non-secret settings saved for this Windows user."""
+ if os.name!='nt':return
+ try:
+  import winreg
+  with winreg.OpenKey(winreg.HKEY_CURRENT_USER,'Environment') as key:
+   for name in ('WORKOS_PUBLIC_AUTH_MODE','WORKOS_PUBLIC_ORIGIN','WORKOS_TUNNEL_ID','WORKOS_TUNNEL_CONFIG','WORKOS_CLOUDFLARED','WORKOS_SYNC_ROOT','WORKOS_LIBREOFFICE_CLI','WORKOS_NODE'):
+    if not env.get(name):
+     try:env[name]=str(winreg.QueryValueEx(key,name)[0])
+     except OSError:pass
+ except OSError:pass
+
 def configure_sync_env(env):
  if env.get('WORKOS_SYNC_ROOT'):return
  one_drive=env.get('OneDriveCommercial') or env.get('OneDrive') or env.get('OneDriveConsumer')
@@ -46,6 +58,8 @@ def notify(message):
 def main():
  parser=argparse.ArgumentParser(description='Launch Local WorkOS with an existing Python 3.11+.')
  parser.add_argument('--stop',action='store_true')
+ parser.add_argument('--no-browser',action='store_true')
+ parser.add_argument('--setup-password',action='store_true')
  parser.add_argument('--python',default=os.environ.get('WORKOS_PYTHON',sys.executable),help='Python executable path or command (default: current interpreter)')
  args=parser.parse_args()
  DATA.mkdir(parents=True,exist_ok=True)
@@ -55,6 +69,7 @@ def main():
   return 0
  if not healthy():
   env=dict(os.environ)
+  configure_saved_env(env)
   configure_sync_env(env)
   env['PYTHONPATH']=str(ROOT/'vendor')+os.pathsep+env.get('PYTHONPATH','')
   env['PYTHONDONTWRITEBYTECODE']='1'
@@ -81,7 +96,7 @@ def main():
    time.sleep(.15)
   else:
    proc.terminate();notify('启动超时，已停止本次启动的进程。请查看本机启动日志。');return 1
- webbrowser.open(URL)
+ if not args.no_browser:webbrowser.open(URL+'/auth/setup' if args.setup_password else URL)
  return 0
 
 if __name__=='__main__':raise SystemExit(main())
