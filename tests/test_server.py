@@ -252,6 +252,18 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result['answer'], '已保存 1 条结论。')
         self.assertEqual(result['steps'][0]['action'], 'create_note')
         self.assertTrue(any(note['title'] == '助手结论' for note in self.request('GET', '/api/state')[1]['notes']))
+    def test_pptx_export_creates_editable_section_slides(self):
+        from workos.exports import pptx_report
+        from pptx import Presentation
+        import io
+        payload=pptx_report({'title':'Synthetic Investment Case','body':'# Market\n• Market size is 100.\n## Risks\no Verify adoption.\n➢ If approvals slip, launch moves.'})
+        self.assertTrue(payload.startswith(b'PK\x03\x04'))
+        deck=Presentation(io.BytesIO(payload))
+        self.assertEqual(len(deck.slides),3)
+        text='\n'.join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+        for value in ('Synthetic Investment Case','Market','100','Risks','Verify adoption','approvals slip'):
+            self.assertIn(value,text)
+
     def test_house_minutes_docx_format(self):
         from workos.exports import expert_minutes_docx
         from docx import Document
@@ -376,6 +388,12 @@ class ServerTests(unittest.TestCase):
         for field in ('base_url', 'model', 'api_key'):
             with self.subTest(field=field):
                 self.assertEqual(self.request('POST', '/api/ai/settings', {field: 123})[0], 400)
+
+    def test_export_pptx_endpoint(self):
+        record=self.create('deliverables',{'title':'Synthetic PPT','body':'# Market\n• Market size 100.'})
+        status,payload=self.request('GET','/api/export/'+record['id']+'?format=pptx')
+        self.assertEqual(status,200)
+        self.assertTrue(payload.startswith(b'PK\x03\x04'))
 
     def test_export_html_escapes_user_markup(self):
         title = '<script>fixture_title_attack()</script>'

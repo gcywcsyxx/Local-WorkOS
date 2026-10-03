@@ -160,6 +160,54 @@ def valuation_xlsx(method, assumptions, result):
                     cell.alignment=Alignment(vertical="top",wrap_text=True)
     out=io.BytesIO();wb.save(out);return out.getvalue()
 
+
+def pptx_report(record):
+ from pptx import Presentation
+ from pptx.util import Inches,Pt
+ from pptx.dml.color import RGBColor
+ from pptx.enum.text import PP_ALIGN
+ title=str(record.get('title') or 'Research Material')[:200]
+ body=str(record.get('body') or '').replace('\\n','\n').replace('\r\n','\n').replace('\r','\n')
+ prs=Presentation();prs.slide_width= Inches(13.333);prs.slide_height= Inches(7.5)
+ navy=RGBColor(23,54,93);blue=RGBColor(47,91,147);cream=RGBColor(250,246,235);muted=RGBColor(95,110,125)
+ def add_title(slide,text,subtitle=None):
+  box=slide.shapes.add_textbox(Inches(.65),Inches(.35),Inches(12),Inches(.8));p=box.text_frame.paragraphs[0];p.text=text;p.font.name='Arial';p.font.size=Pt(25);p.font.bold=True;p.font.color.rgb=navy
+  if subtitle:
+   b=slide.shapes.add_textbox(Inches(.68),Inches(1.12),Inches(12),Inches(.35));q=b.text_frame.paragraphs[0];q.text=subtitle;q.font.name='Arial';q.font.size=Pt(10);q.font.color.rgb=muted
+ def add_footer(slide,n):
+  bar=slide.shapes.add_shape(1,Inches(.65),Inches(7.12),Inches(12),Inches(.02));bar.fill.solid();bar.fill.fore_color.rgb=navy;bar.line.fill.background()
+  box=slide.shapes.add_textbox(Inches(.68),Inches(7.16),Inches(12),Inches(.2));p=box.text_frame.paragraphs[0];p.text='Local WorkOS · 工作草稿 · '+str(n);p.font.name='Arial';p.font.size=Pt(8);p.font.color.rgb=muted
+ # Cover
+ slide=prs.slides.add_slide(prs.slide_layouts[6]);slide.background.fill.solid();slide.background.fill.fore_color.rgb=cream
+ band=slide.shapes.add_shape(1,Inches(0),Inches(0),Inches(.18),Inches(7.5));band.fill.solid();band.fill.fore_color.rgb=navy;band.line.fill.background()
+ box=slide.shapes.add_textbox(Inches(.9),Inches(1.9),Inches(11.5),Inches(1.3));p=box.text_frame.paragraphs[0];p.text=title;p.font.name='Arial';p.font.size=Pt(30);p.font.bold=True;p.font.color.rgb=navy
+ sub=slide.shapes.add_textbox(Inches(.95),Inches(3.3),Inches(11),Inches(.7));p=sub.text_frame.paragraphs[0];p.text='讨论材料 / 投资研究';p.font.name='Arial';p.font.size=Pt(18);p.font.color.rgb=blue
+ note=slide.shapes.add_textbox(Inches(.95),Inches(6.65),Inches(11),Inches(.35));p=note.text_frame.paragraphs[0];p.text='请核对数据、来源、保密范围和结论口径后再外发。';p.font.name='Arial';p.font.size=Pt(10);p.font.color.rgb=muted
+ # Split content into heading-led editable slides, capped for safety.
+ sections=[];heading='核心内容';lines=[]
+ for raw in body.replace('\r','').split('\n'):
+  line=raw.strip()
+  if line.startswith('#'):
+   if lines:sections.append((heading,lines))
+   heading=line.lstrip('# ').strip()[:120] or '内容';lines=[]
+  elif line:lines.append(line)
+ if lines:sections.append((heading,lines))
+ if not sections:sections=[('核心内容',[body[:2000] or '暂无正文'])]
+ for index,(head,items) in enumerate(sections[:40],1):
+  slide=prs.slides.add_slide(prs.slide_layouts[6]);slide.background.fill.solid();slide.background.fill.fore_color.rgb=RGBColor(255,255,255);add_title(slide,head,'证据与结论需回到来源材料复核')
+  box=slide.shapes.add_textbox(Inches(.9),Inches(1.55),Inches(11.6),Inches(5.25));tf=box.text_frame;tf.clear();tf.word_wrap=True
+  for j,line in enumerate(items[:18]):
+    p=tf.paragraphs[0] if j==0 else tf.add_paragraph();text=line;level=0;bullet=False
+    if text.startswith('➢'):level=2;bullet=True;text=text[1:].strip()
+    elif text.startswith('o '):level=1;bullet=True;text=text[2:].strip()
+    elif text.startswith(('• ','- ')):bullet=True;text=text[2:].strip()
+    p.text=text;p.level=level;p.font.name='Arial';p.font.size=Pt(16 if level==0 else 14);p.font.color.rgb=RGBColor(36,51,69);p.space_after=Pt(10);p.text=('• '+text) if bullet and not level else text
+
+  add_footer(slide,index+1)
+ if len(sections)>40:
+  slide=prs.slides.add_slide(prs.slide_layouts[6]);add_title(slide,'附录内容已截断','正文超过40个章节，完整内容仍在原始交付记录中。');add_footer(slide,41)
+ out=io.BytesIO();prs.save(out);return out.getvalue()
+
 def docx_report(record):
  try:
   from docx import Document

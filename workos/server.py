@@ -435,6 +435,9 @@ class Handler(BaseHTTPRequestHandler):
     if fmt=='md':return self.respond(markdown(record),mime='text/markdown; charset=utf-8',filename=title+'.md')
     if fmt=='html':return self.respond(html_report(record),mime='text/html; charset=utf-8',filename=title+'.html')
     if fmt=='docx':return self.respond(docx_report(record),mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document',filename=title+'.docx')
+    if fmt=='pptx':
+     from .exports import pptx_report
+     return self.respond(pptx_report(record),mime='application/vnd.openxmlformats-officedocument.presentationml.presentation',filename=title+'.pptx')
     raise ValueError('不支持的导出格式')
    match=re.fullmatch(r'/api/meeting-export/([^/]+)',path)
    if match:
