@@ -16,19 +16,25 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function state() {
-  return { aiRuns: new Map(), aiKinds: new Map(), workflowJobs: [], workflowStopBusy: new Set(),
+  return { aiRuns: new Map(), aiKinds: new Map(), aiReports: new Map(), workflowJobs: [], workflowStopBusy: new Set(),
     question: 'Original draft', workflowMessage: 'Original workflow draft', agentMessage: 'Original agent draft',
     agentAnswer: '', agentSteps: [] };
 }
 function harness(implementation = async () => ({})) {
-  let current = state(), counter = 0;
+  let current = state(), counter = 0, timerCounter = 0;
   const app = { epoch: 1, workspace: 'personal' }, calls = [], effects = [], region = {};
+  const timers = new Map();
+  const schedule = (kind, callback, delay) => { const id = ++timerCounter; timers.set(id, { kind, callback, delay }); return id; };
   const sandbox = {
     app, AbortController, crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}` },
+    setTimeout: (callback, delay) => schedule('timeout', callback, delay),
+    setInterval: (callback, delay) => schedule('interval', callback, delay),
+    clearTimeout: id => timers.delete(id), clearInterval: id => timers.delete(id),
     StaleRequestError: class extends Error { constructor() { super('Workspace changed'); this.name = 'StaleRequestError'; } },
     view: () => current,
     api: async (url, options) => { calls.push({ url, options }); return implementation(url, options, calls); },
     $: selector => selector === '#ai-run-controls' ? region : null,
+    $$: () => [],
     esc: value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character])),
     actionButton: (label, _action, _symbol, _style, attrs) => `<button ${attrs}>${label}</button>`,
     workflowInfo: () => ({ title: 'Synthetic draft' }), activeWorkflowJob: job => ['queued', 'running'].includes(job.status),
@@ -38,26 +44,35 @@ function harness(implementation = async () => ({})) {
   };
   const helpers = vm.runInNewContext(slice('  const AI_BUSY =', '  function notify(') +
     '\n({beginAiRun,assertAiRun,aiRequest,finishAiRun,stopAiRun,updateAiControls});', sandbox);
-  return { ...helpers, app, calls, effects, region, get state() { return current; }, changeView: next => { current = next; } };
+  return { ...helpers, app, calls, effects, region, timers, get state() { return current; }, changeView: next => { current = next; } };
 }
 const tests = [];
 function test(name, run) { tests.push({ name, run }); }
 
 test('requests carry the exact generated UUID, body and per-run abort signal', async () => {
-  const h = harness(async () => ({ answer: 'Synthetic answer' })), run = h.beginAiRun('ask');
+  const progress = { status: 'completed', stage: 'completed', stage_label: '已完成', elapsed_ms: 1200,
+    events: [{ sequence: 1, label: '读取已选资料', status: 'completed', elapsed_ms: 200 }] };
+  const h = harness(async url => url === '/ask' ? { answer: 'Synthetic answer' } : { operation: progress }), run = h.beginAiRun('ask');
   const body = { question: 'Synthetic question', document_ids: ['synthetic-source'] };
   assert.match(run.id, /^[0-9a-f-]{36}$/);
   assert.equal(h.state.asking, true);
   assert.equal(h.state.aiRuns.get(run.id), run);
+  assert.equal(h.timers.size, 2);
   await h.aiRequest(run, '/ask', body);
-  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls.length, 2);
   assert.equal(h.calls[0].url, '/ask');
   assert.equal(h.calls[0].options.headers['X-WorkOS-Request-ID'], run.id);
   assert.equal(h.calls[0].options.body, body);
   assert.equal(h.calls[0].options.signal, run.controller.signal);
+  assert.equal(h.calls[1].url, `/operations/${run.id}`);
+  assert.equal(h.calls[1].options?.body, undefined);
+  assert.equal(run.progress, progress);
   assert.equal(h.finishAiRun(run), true);
   assert.equal(h.state.asking, false);
   assert.equal(h.state.aiRuns.size, 0);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.state.aiReports.get('ask'), run);
+  assert.equal(h.state.aiReports.get('ask').progress.events, progress.events);
 });
 
 test('late success or error and old finally cannot overwrite a replacement run', async () => {
@@ -100,7 +115,9 @@ test('a failed stop remains retryable and stops only the requested operation', a
     return { status: 'cancelled' };
   });
   const ask = h.beginAiRun('ask'), meeting = h.beginAiRun('meeting');
+  assert.equal(h.timers.size, 4);
   await h.stopAiRun(ask.id);
+  assert.equal(h.timers.size, 2);
   assert.equal(ask.controller.signal.aborted, true);
   assert.equal(ask.cancelPending, false);
   assert.ok(ask.cancelError);

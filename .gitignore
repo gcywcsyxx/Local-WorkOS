@@ -38,3 +38,5 @@ secrets*
 .DS_Store
 Thumbs.db
 workos-release.json
+project-artifacts.json
+project-artifacts/

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import re
 import threading
 import time
+from .ai_progress import new_execution, add_event, finish_execution, public_execution, bind_progress, report_progress
 
 _current = threading.local()
 
@@ -37,6 +38,8 @@ class CancellationToken:
         self.provisional_receipts = {}
         self.pinned = False
         self.touched = time.monotonic()
+        self.execution = new_execution()
+        self.progress_callback = None
 
     def check(self):
         if self.event.is_set():
@@ -55,12 +58,20 @@ class CancellationToken:
             if self.status not in ('completed', 'failed'):
                 self.event.set()
                 self.status = 'cancelled'
+                finish_execution(self.execution,'cancelled')
             self.touched = time.monotonic()
             return self.public()
 
     def public(self):
-        return {'request_id': self.request_id, 'status': self.status,
+        return {**public_execution(self.execution,self.status),'request_id': self.request_id, 'status': self.status,
                 'steps': copy.deepcopy(self.steps), **self.completed_metadata}
+
+    def report(self,stage,detail='',status='running'):
+        with self.lock:
+            self.check()
+            add_event(self.execution,stage,detail,status)
+            callback=self.progress_callback
+        if callback:callback(stage,detail,status)
 
 
 @contextmanager
@@ -69,7 +80,7 @@ def bind_token(token):
     _current.token = token
     try:
         token.check()
-        yield token
+        with bind_progress(token.report):yield token
         token.check()
     finally:
         _current.token = previous
@@ -184,7 +195,25 @@ class OperationRegistry:
         # A bounded tombstone handles Stop arriving before the request itself.
         return self.token(workspace, request_id).cancel()
 
-    def run(self, workspace, request_id, execute):
+    def get(self, workspace, request_id):
+        validate_request_id(request_id)
+        with self.lock:
+            token=self.entries.get((workspace,request_id))
+        if token is None:raise KeyError('执行记录不存在')
+        with token.lock:return token.public()
+
+    def list(self, workspace, limit=30):
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('执行记录列表上限无效')
+        with self.lock:
+            tokens = [token for (scope, _), token in self.entries.items() if scope == workspace]
+        records = []
+        for index, token in enumerate(tokens):
+            with token.lock:
+                records.append((token.touched, index, token.public()))
+        return [record for _, _, record in sorted(records, key=lambda item:(item[0],item[1]), reverse=True)[:limit]]
+
+    def run(self, workspace, request_id, execute, *, kind='ask', model_id=''):
         if request_id is None:
             check_cancelled()
             return execute(None)
@@ -196,17 +225,21 @@ class OperationRegistry:
                 if sum(t.status == 'running' for t in self.entries.values()) >= self.max_active:
                     raise ValueError('运行中的工作已满，请稍后重试')
                 token.status = 'running'
+                token.execution=new_execution(kind,model_id,status='running')
+                add_event(token.execution,'prepare','开始处理本次工作')
         try:
             with bind_token(token):
                 result = execute(token)
             with token.guard():
                 token.status = 'completed'
+                finish_execution(token.execution,'completed')
                 token.touched = time.monotonic()
                 return result
         except BaseException:
             with token.lock:
                 if token.status != 'cancelled':
                     token.status = 'failed'
+                    finish_execution(token.execution,'failed')
                 token.touched = time.monotonic()
             raise
 

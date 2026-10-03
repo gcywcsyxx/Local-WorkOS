@@ -100,7 +100,7 @@ class WorkflowEndpointTests(unittest.TestCase):
         with patch.dict(os.environ, {'WORKOS_SYNC_ROOT':'', 'WORKOS_PUBLIC_ORIGIN':'', 'WORKOS_PUBLIC_AUTH_MODE':'access'}), \
              patch('workos.server.find_root', return_value=None):
             self.app = Application(Path(self.temporary.name) / 'synthetic-data', port=0)
-        self.addCleanup(lambda:[store.close() for store in self.app.stores.values()])
+        self.addCleanup(self.app.close)
         self.app.local_chat = Mock(return_value=('Synthetic grounded result [S1]', 'Synthetic model'))
         self.store = self.app.stores['personal']
         self.doc = self.store.create('documents', {'title':'Synthetic source', 'content':'Synthetic evidence'})

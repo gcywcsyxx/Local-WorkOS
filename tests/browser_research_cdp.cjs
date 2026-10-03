@@ -17,6 +17,10 @@ const failures = [], requests = [], originalRequests = [], runtimeErrors = [], i
 const workflowJobs = new Map(), workflowRequestKeys = new Map(), workflowCancelTombstones = new Set();
 const auxiliaryModelMocks = new Map();
 const operationCancelFailures = new Map();
+const mockConversations=new Map(),mockOperations=new Map(),mockArchives=new Map(),mockBindings=new Map();
+const restoreOperationIds=new Set();
+const requestWorkspace=event=>Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workspace')?.[1]||'personal';
+const requestOperation=event=>Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workos-request-id')?.[1];
 const csrfScenario={enabled:false,seedStale:false,mode:'recover',bootstrapCalls:0,parseRequests:[],successfulModelCalls:0,expected:null,retryDom:null};
 let temp, server, chrome, cdp, origin, csrf, checks = 0;
 
@@ -164,8 +168,10 @@ async function finishMockWorkflow(meta){
   const coverage=docs.map((item,index)=>({document_id:item.id,source_id:'S'+(index+1),title:item.title,excerpt_chars:item.content.length,total_chars:item.content.length,truncated:false}));
   const text='# Synthetic saved workflow\n\n**Editable draft**\n\n- Synthetic finding'+(docs.length?' [S1]':'')+'\n\n| Item | Status |\n| --- | --- |\n| Synthetic result | Draft |';
   const quality_report={status:'needs_review',label:'流程检查完成',can_save:true,facts_verified:false,harness:'synthetic',checks:[{id:'coverage',label:'资料覆盖',status:docs.length?'pass':'warn',detail:docs.length?'Selected synthetic evidence only.':'No selected evidence.'},{id:'table_structure',label:'table structure',status:'pass',detail:'Synthetic Markdown structure checked.'},{id:'verification',label:'外部事实核实',status:'not_checked',detail:'Synthetic fixture; no fact verification.'}],metrics:{sources:docs.length},constraints:{table_required:true,table_count:1,table_columns:2},limitations:['Synthetic mocked pipeline; no real model called.'],review:{status:'advisory_complete',verdict:'issues_found',scope:'Synthetic source excerpts only; no outside verification.',issues:[{criterion:'Evidence support',severity:'warning',quote:'Synthetic finding',explanation:'Synthetic unresolved evidence question.',proposed_fix:'Request specific supporting source evidence.',source_ids:docs.length?['S1']:[]}]}};
-  const deliverable=await api('deliverables',{title:'Synthetic '+job.workflow_key+' draft',kind:'自定义',project_id:job.project_id,body:text,workflow_key:job.workflow_key,source_ids:job.document_ids,coverage,generation_id:job.id,quality_report});
+  const deliverable=await api('deliverables',{title:'Synthetic '+job.workflow_key+' draft',kind:'自定义',project_id:job.project_id,body:text,workflow_key:job.workflow_key,source_ids:job.document_ids,coverage,generation_id:job.id,quality_report,...(job.revision_of?{revision_of:job.revision_of,revision_number:Number(meta.parent?.revision_number||1)+1}:{})});
   job.result={answer:text,citations:docs.map(item=>({document_id:item.id,title:item.title,quote:item.content.slice(0,100),ordinal:1})),coverage,deliverable,quality_report,workflow_key:job.workflow_key,mode:'model',limitations:['Synthetic mocked model response; no real model called.']};
+  appendMockTurn({...job,message:job.message},job.result,job.id,meta.parent);
+  job.result.archive=mockArchiveReceipt('deliverables',deliverable,job.project_id);
   job.status='completed';job.stage='save';job.stages.forEach(stage=>stage.status='completed');job.updated_at=new Date().toISOString();job.revision++;
 }
 function cancelMockWorkflow(meta) {
@@ -189,9 +195,10 @@ async function mockWorkflowRequest(event,url){
     const cacheKey=workspace+':'+body.request_id;
     if(workflowRequestKeys.has(cacheKey)){await fulfillJson(event,{job:workflowJobs.get(workflowRequestKeys.get(cacheKey)).job},202);return true;}
     const id=randomUUID(),stamp=new Date(body.message==='Synthetic durable running job'?Date.now()-120000:Date.now()).toISOString();
-    const job={id,workflow_key:body.workflow_key,message:body.message,project_id:body.project_id,document_ids:body.document_ids,mode:body.mode,model_id:body.model_id,quality_mode:body.quality_mode,status:'queued',stage:'prepare',stages:mockStages(),revision:1,created_at:stamp,updated_at:stamp,poll_after_ms:1500,retryable:false};
+    const job={id,workflow_key:body.workflow_key,message:body.message,project_id:body.project_id,document_ids:body.document_ids,mode:body.mode,model_id:body.model_id,quality_mode:body.quality_mode,conversation_id:body.conversation_id,revision_of:body.revision_of,status:'queued',stage:'prepare',stage_label:'整理范围',eta:{min_seconds:30,max_seconds:60,estimated:true,basis:'Synthetic phase estimate, not token progress.'},elapsed_ms:0,events:[{sequence:1,elapsed_ms:0,stage:'prepare',label:'整理范围',status:'completed',detail:'仅使用提交时所选材料。'}],stages:mockStages(),revision:1,created_at:stamp,updated_at:stamp,poll_after_ms:1500,retryable:false};
     const documents=await Promise.all(body.document_ids.map(documentId=>api('documents/'+documentId)));
-    const meta={workspace,job,documents,reads:0,attempts:1,hold:body.message==='Synthetic durable running job'||body.message.startsWith('Synthetic stoppable workflow'),disconnectOnce:false};
+    const parent=body.revision_of?(await api('state')).deliverables.find(item=>item.id===body.revision_of):null;
+    const meta={workspace,job,documents,parent,reads:0,attempts:1,hold:body.message==='Synthetic durable running job'||body.message.startsWith('Synthetic stoppable workflow'),disconnectOnce:false};
     workflowJobs.set(id,meta);workflowRequestKeys.set(cacheKey,id);if(workflowCancelTombstones.has(cacheKey))cancelMockWorkflow(meta);
     await fulfillJson(event,{job},202);return true;
   }
@@ -210,6 +217,7 @@ async function mockWorkflowRequest(event,url){
     if(meta.disconnectOnce){meta.disconnectOnce=false;await fulfillJson(event,{error:'Synthetic temporary connection failure'},503);return true;}
     if(['queued','running'].includes(meta.job.status)){
       meta.reads++;meta.job.status='running';meta.job.stage=meta.reads===1?'generate':'review';meta.job.revision++;meta.job.updated_at=new Date().toISOString();
+      meta.job.elapsed_ms=Date.now()-Date.parse(meta.job.created_at);meta.job.stage_label=meta.reads===1?'生成正文':'复核证据';meta.job.progress_percent=meta.reads===1?17:50;meta.job.events.push({sequence:meta.job.events.length+1,elapsed_ms:meta.job.elapsed_ms,stage:meta.job.stage,label:meta.job.stage_label,status:'running',detail:'Synthetic public execution event.'});
       meta.job.stages.forEach(stage=>stage.status=stage.key==='prepare'?'completed':stage.key===meta.job.stage?'running':'pending');
       if(meta.reads>=2&&!meta.hold){
         if(meta.job.message==='Synthetic unavailable provider'||(meta.job.message==='Synthetic retryable provider'&&meta.attempts===1)){
@@ -220,6 +228,39 @@ async function mockWorkflowRequest(event,url){
     await fulfillJson(event,{job:meta.job});return true;
   }
   throw Error('Unexpected synthetic job request '+url.pathname);
+}
+function appendMockTurn(body,result,operationId,parent=null) {
+  const conversation=mockConversations.get(body.conversation_id);if(!conversation)return result;
+  const artifact=result.deliverable?{collection:'deliverables',id:result.deliverable.id,version:result.deliverable.revision_number||1}:result.meeting_id?{collection:'meetings',id:result.meeting_id}:null;
+  const turn={id:randomUUID(),sequence:conversation.turns.length+1,request_id:operationId,status:'completed',user_message:body.question||body.message||body.text||body.revision_instructions||body.transcript,assistant_message:result.answer||result.summary||JSON.stringify(result.assumptions||{}),source_ids:body.document_ids||[],current_artifact:artifact,base_snapshot:parent,created_at:new Date().toISOString()};
+  conversation.turns.push(turn);conversation.turns_total=conversation.turns.length;conversation.updated_at=turn.created_at;if(artifact)conversation.metadata.current_artifact=artifact;
+  result.conversation_id=conversation.id;result.context={conversation_id:conversation.id,turns_total:conversation.turns_total,truncated:false,source_ids:conversation.source_ids};return result;
+}
+function mockArchiveReceipt(collection,record,projectId,{failed=false}={}) {
+  const archive_id=randomUUID(),folder=mockBindings.get(String(projectId))||path.join(temp,'synthetic-archives',String(projectId));
+  const receipt={archive_id,collection,record_id:record.id,project_id:projectId,version:'v1',version_number:1,folder,artifact_folder:path.join(folder,'Synthetic draft v1'),status:failed?'failed':'saved_local',binding_status:mockBindings.has(String(projectId))?'bound':'managed',files:failed?[]:[{name:'Synthetic draft.html',path:path.join(folder,'Synthetic draft v1','Synthetic draft.html'),format:'html',index:0}],error:failed?'Synthetic exporter failed; record remains saved.':'',retryable:failed};
+  const key=String(projectId),list=mockArchives.get(key)||[];list.unshift(receipt);mockArchives.set(key,list);return receipt;
+}
+async function mockContextRequest(event,url) {
+  const workspace=requestWorkspace(event);
+  if(url.pathname==='/api/operations'){await fulfillJson(event,{operations:[...restoreOperationIds].map(request_id=>({request_id,kind:'ask',status:mockOperations.get(request_id)?.status||'running',conversation_id:mockOperations.get(request_id)?.body?.conversation_id,elapsed_ms:12000,stage:'generate',stage_label:'调用所选模型',events:[]}))});return true;}
+  if(url.pathname==='/api/artifacts/config'){if(event.request.method==='POST'){const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:'POST',body});mockBindings.set('__roots',body.roots);}await fulfillJson(event,{roots:mockBindings.get('__roots')||[]});return true;}
+  if(url.pathname==='/api/conversations'){
+    if(event.request.method==='POST'){const body=JSON.parse(event.request.postData||'{}'),stamp=new Date().toISOString();const conversation={...body,id:randomUUID(),workspace,turns:[],turns_total:0,created_at:stamp,updated_at:stamp};mockConversations.set(conversation.id,conversation);await fulfillJson(event,{conversation},201);}
+    else await fulfillJson(event,{conversations:[...mockConversations.values()].filter(item=>item.workspace===workspace&&item.project_id===url.searchParams.get('project_id')&&item.purpose===url.searchParams.get('purpose')).reverse()});
+    return true;
+  }
+  if(/^\/api\/conversations\/[^/]+$/.test(url.pathname)){const conversation=mockConversations.get(url.pathname.split('/')[3]);await fulfillJson(event,conversation?.workspace===workspace?{conversation}:{error:'Synthetic conversation unavailable'},conversation?.workspace===workspace?200:404);return true;}
+  if(/^\/api\/operations\/[^/]+$/.test(url.pathname)){
+    const id=url.pathname.split('/')[3],meta=mockOperations.get(id);if(!meta){await fulfillJson(event,{error:'Synthetic operation not registered'},404);return true;}
+    await fulfillJson(event,{operation:{id,request_id:id,conversation_id:meta.body?.conversation_id,status:meta.status||'running',elapsed_ms:Date.now()-meta.start,stage:'generate',stage_label:'调用所选模型',progress_percent:null,eta:{min_seconds:20,max_seconds:55,estimated:true,basis:'按当前阶段估计，模型耗时可能变化。'},events:[{sequence:1,elapsed_ms:0,stage:'prepare',label:'核对项目与资料范围',status:'completed',detail:'仅带入本次明确选定的材料。'},{sequence:2,elapsed_ms:10,stage:'generate',label:'调用所选模型',status:'running',detail:'等待模型回复；不显示内部推理内容。'}]}});return true;
+  }
+  const projectMatch=url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts(?:\/bind)?$/);
+  if(projectMatch){const projectId=projectMatch[1];if(event.request.method==='POST'){const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:'POST',body});mockBindings.set(projectId,body.path);}
+    await fulfillJson(event,{binding:{status:mockBindings.has(projectId)?'bound':'managed',folder:mockBindings.get(projectId)||path.join(temp,'synthetic-archives',projectId),managed:!mockBindings.has(projectId),candidates:[]},archives:mockArchives.get(projectId)||[]});return true;}
+  if(url.pathname==='/api/artifacts/archive'){const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:'POST',body});const record=(await api('state'))[body.collection].find(item=>item.id===body.id),receipt=mockArchiveReceipt(body.collection,record,record.project_id);await fulfillJson(event,{archive:receipt});return true;}
+  if(/^\/api\/artifacts\/[^/]+\/files\/\d+$/.test(url.pathname)){requests.push({path:url.pathname,method:'GET'});await cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/octet-stream'}],body:Buffer.from('Synthetic archived file.').toString('base64')});return true;}
+  return false;
 }
 async function main() {
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'workos-research-cdp-'));
@@ -256,6 +297,8 @@ async function main() {
   cdp.on('Fetch.requestPaused', async event => {
     const url = new URL(event.request.url);
     if (url.origin !== origin) return cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+    const opId=requestOperation(event);if(opId&&event.request.method==='POST'&&/^\/api\/(ask|agent|meeting-draft|model\/parse-assumptions|workflows\/plan)$/.test(url.pathname)&&!mockOperations.has(opId))mockOperations.set(opId,{start:Date.now(),body:JSON.parse(event.request.postData||'{}'),status:'running'});
+    if(await mockContextRequest(event,url))return;
     if(csrfScenario.enabled&&url.pathname==='/api/bootstrap'&&event.request.method==='GET'){
       csrfScenario.bootstrapCalls++;
       // Only the browser receives a synthetic stale token. No server token or endpoint is modified.
@@ -279,24 +322,27 @@ async function main() {
       }
       csrfScenario.retryDom=await cdp.evaluate("({sameReview:document.querySelector('.valuation-review')===window.__csrfPendingReview,sameMain:document.querySelector('#main')===window.__csrfPendingMain,ready:document.querySelector('#main').getAttribute('aria-busy')!=='true',text:document.querySelector('#valuation-text').value,json:document.querySelector('#valuation-json').value})");
       csrfScenario.successfulModelCalls++;
-      return fulfillJson(event,{assumptions:csrfScenario.expected,missing:[],unmapped_fields:[]});
+      return fulfillJson(event,appendMockTurn(body,{assumptions:csrfScenario.expected,missing:[],unmapped_fields:[]},opId));
     }
     if (/^\/api\/documents\/[^/]+\/original$/.test(url.pathname)) originalRequests.push(url.pathname);
     if(url.pathname==='/api/workflows/plan') requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
     if(/^\/api\/operations\/[^/]+\/cancel$/.test(url.pathname)){
       requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
       const id=url.pathname.split('/')[3],remaining=operationCancelFailures.get(id)||0;if(remaining){operationCancelFailures.set(id,remaining-1);return fulfillJson(event,{error:'Synthetic cancellation temporarily unavailable'},503);}
+      if(mockOperations.has(id))mockOperations.get(id).status='cancelled';
+      for(const conversation of mockConversations.values())for(const turn of conversation.turns)if(turn.request_id===id)turn.status='cancelled';
       return fulfillJson(event,{status:'cancelled',steps:[]});
     }
     if(await mockWorkflowRequest(event,url))return;
     if(auxiliaryModelMocks.has(url.pathname)){
-      const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body});const mock=auxiliaryModelMocks.get(url.pathname);return fulfillJson(event,typeof mock==='function'?await mock(body):mock);
+      const body=JSON.parse(event.request.postData||'{}');requests.push({path:url.pathname,method:event.request.method,body,operationId:opId});const mock=auxiliaryModelMocks.get(url.pathname),result=typeof mock==='function'?await mock(body):structuredClone(mock);return fulfillJson(event,appendMockTurn(body,result,opId));
     }
     if (['/api/ask', '/api/agent'].includes(url.pathname)) {
       const body = JSON.parse(event.request.postData || '{}'),operationId=Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-workos-request-id')?.[1]; requests.push({ path: url.pathname, method: event.request.method, body, operationId });
       const result = url.pathname === '/api/ask' ? { answer, mode: 'model', elapsed_ms: 1, citations: [{ document_id: doc.id, id: source.chunks[0].id, ordinal: source.chunks[0].ordinal, title: doc.title, quote }] } : { answer, steps: [] };
       // This is a synthetic presentation fixture; backend tests verify actual no-hit provider dispatch.
       if(url.pathname==='/api/ask'&&body.question===nohitQuestion)Object.assign(result,{answer:'已阅读选定材料的原文节选。合成结论：收入增长17%；仍需核实定义和统计期间。[S1]',model:'DeepSeek V4.1 Flash',model_called:true,retrieval_basis:'selected_excerpt',warning:nohitWarning});
+      appendMockTurn(body,result,opId);
       return cdp.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json; charset=utf-8' }], body: Buffer.from(JSON.stringify(result)).toString('base64') });
     }
     if (/^\/api\/(meeting-draft|meeting-ai|meeting-expert|valuation-parse|ai|dsh|model\/parse-assumptions)/.test(url.pathname) && event.request.method !== 'GET') {
@@ -403,7 +449,7 @@ async function main() {
     await select('#research-project',beta.id); assert(await cdp.evaluate("!document.querySelector('.agent-answer')"),'Alpha action result shown under Beta');
     await fill('#question-input','Synthetic Beta scoped action'); await click('#ask-form button[type=submit]');
     await until(()=>requests.filter(r=>r.path==='/api/agent').length===2,'Beta action request');
-    assert(requests.filter(r=>r.path==='/api/agent')[1].body.history.length===0,'Alpha history sent in Beta request');
+    const sent=requests.filter(r=>r.path==='/api/agent');assert(sent[1].body.conversation_id!==sent[0].body.conversation_id&&mockConversations.get(sent[1].body.conversation_id)?.project_id===beta.id&&!('history' in sent[1].body),'Alpha client history or conversation sent in Beta request');
     await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'Beta action complete');
   });
   await check('project material library automatically groups versions and includes every record', async () => {
@@ -630,7 +676,7 @@ async function main() {
         if(intent==='ask')await screenshot('ask-stopped-1280');
         await enter('#question-input');await until(()=>requests.filter(item=>item.path===path).length===before+2,'explicit '+kind+' retry');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'retried '+kind+' response');
         const retried=requests.filter(item=>item.path===path).at(-1);assert(retried.operationId!==sent.operationId,'Retry reused the cancelled '+kind+' operation');
-        if(intent==='actions')assert(!retried.body.history.some(item=>item.content===message),'Cancelled action entered future assistant history');
+        if(intent==='actions')assert(!('history' in retried.body)&&mockConversations.get(retried.body.conversation_id)?.turns.filter(turn=>turn.status==='completed'&&turn.request_id===sent.operationId).length===0,'Cancelled action entered future assistant history');
       } finally { await releaseBrowserResponses(); }
     }
   });
@@ -724,6 +770,63 @@ async function main() {
     try {await until(()=>cdp.evaluate('document.querySelector("#document-dialog").open&&document.querySelector("#document-title").textContent==='+q(doc.title)),'selected-excerpt citation source');assert(await cdp.evaluate('document.querySelector("#document-dialog").textContent.includes('+q(quote)+')&&!!document.querySelector(".document-chunk.highlight")'),'No-hit citation did not locate the selected original source');}
     finally {await cdp.evaluate("document.querySelector('#document-dialog').close()");}
     await cdp.evaluate("document.querySelector('.answer-card').scrollIntoView({block:'start',behavior:'instant'})");await screenshot('ask-selected-excerpt-1280');
+  });
+  await check('public AI progress shows stage elapsed estimated ETA and execution events without replacing drafts',async()=>{
+    await route('research');await select('#research-project',alpha.id);await select('#research-intent','ask');await select('#ask-mode','deepseek');await click('[data-source-id="'+doc.id+'"]');
+    const message='Synthetic progress and ETA question';await fill('#question-input',message);await holdBrowserResponse('/api/ask');
+    try{await enter('#question-input');await until(()=>cdp.evaluate("window.__stopReplies.length===1"),'held progress response');await cdp.evaluate("window.__progressComposer=document.querySelector('#question-input')");
+      await until(()=>cdp.evaluate("document.querySelector('[data-ai-progress=ask]').textContent.includes('预计还需')&&document.querySelector('[data-ai-progress=ask]').textContent.includes('调用所选模型')"),'server stage and ETA');
+      await click('[data-ai-progress=ask] .execution-record summary');const observed=await cdp.evaluate("({text:document.querySelector('[data-ai-progress=ask]').textContent,unknown:document.querySelector('[data-ai-progress=ask] [role=progressbar]').getAttribute('aria-valuenow'),same:document.querySelector('#question-input')===window.__progressComposer,value:document.querySelector('#question-input').value})");assert(observed.text.includes('已用')&&observed.text.includes('时间为估计')&&observed.text.includes('核对项目与资料范围')&&observed.unknown===null&&observed.same&&observed.value===message,'Progress omitted public records, fabricated percentage, or replaced composer: '+JSON.stringify(observed));
+      await cdp.evaluate("document.querySelector('[data-ai-progress=ask]').scrollIntoView({block:'center',behavior:'instant'})");await screenshot('ai-progress-1280');
+      await route('overview');await fill('#start-input','Synthetic unsent home draft during background progress');await delay(1700);assert(await cdp.evaluate("document.querySelector('#start-input').value==='Synthetic unsent home draft during background progress'&&document.querySelector('#ai-run-controls').textContent.includes('预计还需')"),'Progress navigation lost unsent home draft');
+      await click('#ai-run-controls [data-action=ai-stop][data-kind=ask]');await until(()=>cdp.evaluate("!document.querySelector('#ai-run-controls [data-action=ai-stop][data-kind=ask]')"),'progress stop confirmed');
+    }finally{await releaseBrowserResponses();}
+  });
+  let contextualConversationId;
+  await check('ask followups use a stable scoped conversation reset preserves draft and source edits isolate context',async()=>{
+    await route('research');await select('#research-project',alpha.id);await select('#research-intent','ask');await click('[data-source-id="'+doc.id+'"]');
+    const send=async message=>{const before=requests.filter(r=>r.path==='/api/ask').length;await fill('#question-input',message);await enter('#question-input');await until(()=>requests.filter(r=>r.path==='/api/ask').length===before+1,'contextual ask sent');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled"),'contextual ask returned');return requests.filter(r=>r.path==='/api/ask').at(-1);};
+    const first=await send('Synthetic contextual opening question'),second=await send('Synthetic followup: expand the previous answer');contextualConversationId=second.body.conversation_id;assert(first.body.conversation_id===second.body.conversation_id&&mockConversations.get(contextualConversationId).turns.length===2,'Followup lost conversation continuity');
+    assert(await cdp.evaluate("document.querySelector('[data-conversation-kind=ask]').textContent.includes('已有 2 轮')"),'Current contextual scope or turn count missing');
+    await click('[data-action=conversation-history][data-kind=ask]');await until(()=>cdp.evaluate("document.querySelector('#modal').open&&document.querySelector('.conversation-transcript').textContent.includes('Synthetic contextual opening question')&&document.querySelector('.conversation-transcript').textContent.includes('Synthetic followup')"),'visible conversation turns');await screenshot('conversation-history-1280');await click('[data-close-dialog=modal]');
+    await fill('#question-input','Synthetic unsent draft retained by new chat');await click('[data-action=conversation-reset][data-kind=ask]');assert(await cdp.evaluate("document.querySelector('#question-input').value==='Synthetic unsent draft retained by new chat'&&document.querySelector("+q('[data-source-id="'+doc.id+'"]')+").checked"),'New conversation discarded draft or selection');
+    const fresh=await send('Synthetic fresh conversation');assert(fresh.body.conversation_id!==contextualConversationId,'New chat reused old conversation');
+    await click('[data-source-id="'+memo1.id+'"]');const sourcesChanged=await send('Synthetic changed source scope');assert(sourcesChanged.body.conversation_id!==fresh.body.conversation_id&&sourcesChanged.body.document_ids.length===2,'Source change reused prior context');
+  });
+  await check('historical conversations reopen explicitly after refresh and preserve the unsent question',async()=>{
+    await cdp.evaluate('window.__contextReloadMarker=true');await cdp.send('Page.reload');await until(()=>cdp.evaluate("window.__contextReloadMarker===undefined&&!!document.querySelector('#research-project')&&!document.querySelector('#question-input').disabled"),'reloaded research');await select('#research-project',alpha.id);await click('[data-source-id="'+doc.id+'"]');await fill('#question-input','Synthetic unsent restored-context question');
+    const selector='[data-conversation-picker=ask]';await until(()=>cdp.evaluate('[...document.querySelector('+q(selector)+').options].some(option=>option.value==='+q(contextualConversationId)+')'),'persisted conversation option');
+    assert(await cdp.evaluate("document.querySelector('[data-conversation-kind=ask]').textContent.includes('新对话')"),'Refresh silently attached old conversation');await select(selector,contextualConversationId);await until(()=>cdp.evaluate("document.querySelector('[data-conversation-kind=ask]').textContent.includes('已有 2 轮')"),'explicit resumed conversation');assert(await cdp.evaluate("document.querySelector('#question-input').value==='Synthetic unsent restored-context question'"),'Conversation restore overwrote pending question');
+    await enter('#question-input');await until(()=>cdp.evaluate("!document.querySelector('#question-input').disabled&&document.querySelector('[data-conversation-kind=ask]').textContent.includes('已有 3 轮')"),'restored contextual answer');assert(requests.filter(r=>r.path==='/api/ask').at(-1).body.conversation_id===contextualConversationId,'Restored request did not continue history');
+    await select('#research-project',beta.id);await until(()=>cdp.evaluate("[...document.querySelector('[data-conversation-picker=ask]').options].length===1"),'isolated Beta history');assert(await cdp.evaluate("document.querySelector('[data-conversation-kind=ask]').textContent.includes('新对话')"),'Alpha conversation crossed project boundary');
+  });
+  await check('refresh restores active execution progress and finishes without resending model work or overwriting drafts',async()=>{
+    const id=randomUUID(),beforeModels=requests.filter(r=>['/api/ask','/api/agent','/api/workflows/jobs','/api/model/parse-assumptions','/api/meeting-draft'].includes(r.path)).length;mockOperations.set(id,{start:Date.now()-12000,status:'running',body:{conversation_id:contextualConversationId}});restoreOperationIds.add(id);
+    try{await route('overview');await cdp.send('Page.reload');await until(()=>cdp.evaluate('!!document.querySelector('+q('#ai-run-controls [data-action=ai-stop][data-id="'+id+'"]')+')'),'restored sync operation control');await fill('#start-input','Synthetic unsent home draft during restored execution');await until(()=>cdp.evaluate("document.querySelector('#ai-run-controls').textContent.includes('预计还需')"),'restored live ETA');mockOperations.get(id).status='completed';await until(()=>cdp.evaluate('!document.querySelector('+q('#ai-run-controls [data-action=ai-stop][data-id="'+id+'"]')+')'),'restored operation terminal');assert(await cdp.evaluate("document.querySelector('#start-input').value==='Synthetic unsent home draft during restored execution'"),'Recovered completion overwrote unsent draft');assert(requests.filter(r=>['/api/ask','/api/agent','/api/workflows/jobs','/api/model/parse-assumptions','/api/meeting-draft'].includes(r.path)).length===beforeModels,'Restore resent model request');}
+    finally{restoreOperationIds.delete(id);mockOperations.get(id).status='completed';}
+  });
+  await check('workflow revision saves manual edits first and creates a separate version from the current artifact',async()=>{
+    const original=(await api('state')).deliverables.find(item=>item.workflow_key==='legal');assert(original,'Missing original synthetic draft');await route('deliverables');await click('[data-action=select-deliverable][data-id="'+original.id+'"]');const edited='# Synthetic manually edited current draft\n\nUser edits must remain the revision base.';await fill('#deliverable-body',edited);await click('[data-action=workflow-revise][data-id="'+original.id+'"]');await until(()=>cdp.evaluate("location.hash==='#research'&&document.querySelector('[data-conversation-kind=workflow]').textContent.includes('修订：')"),'revision composer');assert((await api('state')).deliverables.find(item=>item.id===original.id).body===edited,'Continue revision ignored unsaved current edits');
+    const count=(await api('state')).deliverables.length,before=workflowPosts().length;await fill('#question-input','Synthetic revise current saved version with a clearer risk table');await enter('#question-input');await until(()=>workflowPosts().length===before+1,'revision registration');const request=workflowPosts().at(-1);assert(request.body.revision_of===original.id&&request.body.project_id===original.project_id&&JSON.stringify(request.body.document_ids)===JSON.stringify(original.source_ids),'Revision lost project or evidence scope');
+    const meta=await until(()=>[...workflowJobs.values()].find(item=>item.job.message===request.body.message),'revision synthetic registration ready');await until(()=>meta.job.status==='completed','revision completed');await until(()=>cdp.evaluate('!!document.querySelector('+q('.workflow-result[data-deliverable-id="'+meta.job.result.deliverable.id+'"]')+')'),'revised version visible');const saved=await api('state');assert(saved.deliverables.length===count+1&&saved.deliverables.find(item=>item.id===original.id).body===edited&&meta.parent.body===edited&&meta.job.result.deliverable.id!==original.id,'Revision overwrote original or used stale base');
+    await cdp.evaluate('document.querySelector('+q('.workflow-result[data-deliverable-id="'+meta.job.result.deliverable.id+'"]')+').scrollIntoView({block:"start",behavior:"instant"})');await screenshot('workflow-revision-1280');
+  });
+  await check('valuation continuation sends the edited prior assumptions with the same method-scoped conversation',async()=>{
+    csrfScenario.enabled=true;csrfScenario.seedStale=false;await route('settings');await click('[data-action=refresh-status]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=refresh-status]').disabled"),'synthetic DSH available');csrfScenario.enabled=false;
+    auxiliaryModelMocks.set('/api/model/parse-assumptions',{assumptions:{...assumptions,net_income:101},missing:[],unmapped_fields:[]});
+    try{await route('finance');await select('#valuation-method','net_income');await select('#valuation-project',alpha.id);await fill('#valuation-text','Synthetic starting assumptions');await click('[data-action=valuation-parse]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=valuation-parse]').disabled&&JSON.parse(document.querySelector('#valuation-json').value).net_income===101"),'initial model assumptions');const first=requests.filter(r=>r.path==='/api/model/parse-assumptions').at(-1);
+      await click('.valuation-review details summary');const prior={...assumptions,net_income:202};await fill('#valuation-json',JSON.stringify(prior));await fill('#valuation-text','Synthetic followup: preserve current income and reduce the multiple');await enter('#valuation-text');await until(()=>cdp.evaluate("!document.querySelector('[data-action=valuation-parse]').disabled"),'model followup');const second=requests.filter(r=>r.path==='/api/model/parse-assumptions').at(-1);assert(second!==first&&second.body.conversation_id===first.body.conversation_id&&second.body.prior_assumptions.net_income===202&&second.body.project_id===alpha.id,'Model followup omitted manually edited current assumptions or lost scope');
+    }finally{auxiliaryModelMocks.delete('/api/model/parse-assumptions');}
+  });
+  await check('meeting followups carry revision instructions and retain the current meeting transcript',async()=>{
+    const meeting=(await api('state')).meetings.find(item=>item.project_id===alpha.id);auxiliaryModelMocks.set('/api/meeting-draft',async body=>{await json(origin+'/api/meetings/'+body.save_meeting_id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,Origin:origin},body:JSON.stringify({summary:'Synthetic revised meeting summary'})});return {saved:true,meeting_id:body.save_meeting_id,summary:'Synthetic revised meeting summary',actions:[]};});
+    try{await route('meetings');await select('#meeting-project',alpha.id);await click('[data-action=select-meeting][data-id="'+meeting.id+'"]');const original=await cdp.evaluate("document.querySelector('#meeting-transcript-input').value");await fill('#meeting-revision-input','Synthetic first meeting requirement');await enter('#meeting-revision-input');await until(()=>cdp.evaluate("!document.querySelector('[data-action=meeting-ai-draft]').disabled"),'first meeting contextual summary');const first=requests.filter(r=>r.path==='/api/meeting-draft').at(-1);await fill('#meeting-revision-input','Synthetic followup: add a table of unresolved questions');await enter('#meeting-revision-input');await until(()=>cdp.evaluate("!document.querySelector('[data-action=meeting-ai-draft]').disabled"),'meeting followup');const second=requests.filter(r=>r.path==='/api/meeting-draft').at(-1);assert(second!==first&&second.body.conversation_id===first.body.conversation_id&&second.body.revision_instructions.includes('unresolved')&&second.body.transcript===original&&second.body.save_meeting_id===meeting.id,'Meeting followup lost original or current meeting context');
+    }finally{auxiliaryModelMocks.delete('/api/meeting-draft');}
+  });
+  await check('project folder status displays saved paths and retries export without another model call',async()=>{
+    const saved=(await api('state')).deliverables.find(item=>item.project_id===alpha.id);const failed=mockArchiveReceipt('deliverables',saved,alpha.id,{failed:true}),beforeModels=requests.filter(r=>['/api/ask','/api/agent','/api/workflows/jobs','/api/model/parse-assumptions','/api/meeting-draft'].includes(r.path)).length;await route('overview');await click('[data-action=project-detail][data-id="'+alpha.id+'"]');await click('[data-action=archive-refresh][data-id="'+alpha.id+'"]');await until(()=>cdp.evaluate("document.querySelector('.project-archives').textContent.includes('Synthetic exporter failed')"),'failed archive receipt');await click('.archive-failed summary');const oldIds=new Set((mockArchives.get(alpha.id)||[]).map(item=>item.archive_id));await click('[data-action=archive-retry][data-id="'+saved.id+'"]');await until(()=>{const receipt=(mockArchives.get(alpha.id)||[]).find(item=>!oldIds.has(item.archive_id)&&item.record_id===saved.id);return receipt&&cdp.evaluate('!!document.querySelector('+q('[data-action=archive-download][data-id="'+receipt.archive_id+'"]')+')');},'retried file archive');
+    const modelCount=requests.filter(r=>['/api/ask','/api/agent','/api/workflows/jobs','/api/model/parse-assumptions','/api/meeting-draft'].includes(r.path)).length;assert(modelCount===beforeModels&&(await api('state')).deliverables.find(item=>item.id===saved.id).body===saved.body,'Export retry repeated generation or changed record');const receipt=(mockArchives.get(alpha.id)||[]).find(item=>!oldIds.has(item.archive_id)&&item.record_id===saved.id);await cdp.evaluate('document.querySelector('+q('[data-action=archive-download][data-id="'+receipt.archive_id+'"]')+').closest("details").open=true');await click('[data-action=archive-download][data-id="'+receipt.archive_id+'"]');await until(()=>requests.some(item=>item.path==='/api/artifacts/'+receipt.archive_id+'/files/0'),'archive download route');
+    const folder=path.join(temp,'synthetic-bound-project');await click('[data-action=archive-bind][data-id="'+alpha.id+'"]');await fill('#field-path',folder);await click('#modal-submit');await until(()=>cdp.evaluate("!document.querySelector('#modal').open&&document.querySelector('.project-archives').textContent.includes('已绑定项目文件夹')"),'folder bound');assert(mockBindings.get(alpha.id)===folder,'Binding path missing');await cdp.evaluate("document.querySelector('.project-archives').scrollIntoView({block:'start',behavior:'instant'})");await screenshot('project-archive-1280');
   });
   await check('mobile 375px viewport has no document horizontal overflow', async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });

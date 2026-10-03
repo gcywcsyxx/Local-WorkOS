@@ -92,7 +92,7 @@ class CsrfRecoveryHttpTests(unittest.TestCase):
         status, record = self.request('POST', '/api/projects', {'name': 'Synthetic recovered write'}, token=refreshed['csrf'])
         self.assertEqual(status, 201, record)
         self.assertEqual(record['name'], 'Synthetic recovered write')
-        status, result = self.request('POST', '/api/model/parse-assumptions', {'method': 'lbo', 'description': 'Synthetic inputs'}, token=refreshed['csrf'])
+        status, result = self.request('POST', '/api/model/parse-assumptions', {'method': 'lbo', 'text': 'Synthetic inputs'}, token=refreshed['csrf'])
         self.assertEqual(status, 200, result)
         self.app.parse_model_assumptions.assert_called_once()
 
@@ -156,7 +156,7 @@ class CsrfRecoveryHttpTests(unittest.TestCase):
         self.app.csrf = 'synthetic-rotated-process-token'
         # A valid password session retains its own token after process rotation.
         status, result = self.request('POST', '/api/model/parse-assumptions',
-            {'method': 'lbo', 'description': 'Synthetic inputs'}, token=fresh_boot['csrf'], headers=second_headers)
+            {'method': 'lbo', 'text': 'Synthetic inputs'}, token=fresh_boot['csrf'], headers=second_headers)
         self.assertEqual(status, 200, result)
         self.app.parse_model_assumptions.assert_called_once()
         for cookie in ('', SESSION_COOKIE + '=synthetic-invalid-session'):
@@ -174,7 +174,7 @@ class CsrfRecoveryHttpTests(unittest.TestCase):
     def test_other_permission_and_input_errors_never_request_token_recovery(self):
         self.app.parse_model_assumptions.side_effect = PermissionError('Synthetic provider policy refusal')
         status, result = self.request('POST', '/api/model/parse-assumptions',
-            {'method': 'lbo', 'description': 'Synthetic inputs'}, token=self.app.csrf)
+            {'method': 'lbo', 'text': 'Synthetic inputs'}, token=self.app.csrf)
         self.assertEqual(status, 403)
         self.assertNotIn('code', result)
         self.app.parse_model_assumptions.assert_called_once()

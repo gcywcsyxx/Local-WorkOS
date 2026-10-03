@@ -1,12 +1,12 @@
 # Local WorkOS — AI engineering handoff
 
-Documentation date: 2026-10-04. Product version: 1.6.1. This document describes model-backed ask fallback, Enter-send, cancellable AI work, session recovery, homepage project creation, quality harness, durable jobs, automatic organization and reloadable-model releases.
+Documentation date: 2026-10-04. Product version: 1.7.0. This document describes persistent contextual revisions, factual AI progress, versioned project output archiving, model-backed ask fallback, cancellable work, quality harness and durable jobs.
 
 Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified behavior and proposed additions. Earlier [README](<../README.md>), [architecture](<ARCHITECTURE.md>) and [testing](<TESTING.md>) descriptions can lag current code; do not remove password auth, editable PPTX or four valuation methods based on historical wording.
 
 ## Source vs install vs data
 - The repository root is editable development source and the Git working tree.
-- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.6.1/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
+- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.7.0/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
 - Runtime personal/demo SQLite, authentication and logs are under `%LOCALAPPDATA%/LocalWorkOS`, never in source control.
 - OneDrive is an optional JSON/text mirror and backup target, not the live SQLite/WAL database or a bidirectional multi-master store.
 - Remote access reaches one authoritative host through its dedicated tunnel; keep that host running and online. Do not attach divergent databases/sessions to the same tunnel from two machines.
@@ -19,6 +19,9 @@ Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified beha
 | [server](<../workos/server.py>) | HTTP routes, authentication, Host/Origin/CSRF, model adapters, upload/export |
 | [jobs](<../workos/jobs.py>) | Durable jobs, frozen inputs, restart recovery, idempotent save |
 | [cancellation](<../workos/cancellation.py>) | Workspace-scoped operation tokens, bounded pre-arrival cancellation markers, guarded commits and completed-action receipts |
+| [AI progress](<../workos/ai_progress.py>) | Actual stage events, sanitized public execution records, task-type ETA ranges and completed-stage progress |
+| [conversations](<../workos/conversations.py>) | Scoped persistent rounds, bounded successful-turn context, artifact snapshots and signatures |
+| [project artifacts](<../workos/project_artifacts.py>) | Runtime-only folder matching/binding, immutable exports, hash manifests and authenticated downloads |
 | [quality](<../workos/quality.py>) | Acceptance checks, critic schema and repair brief; no truth certification |
 | [DSH adapter](<../workos/dsh_harness.py>) | Completion/exit checks and disposable scoped tool execution |
 | [harness contract](<HARNESS.md>) | Quality modes, evidence ledger, compatibility and limitations |
@@ -76,6 +79,10 @@ Use synthetic data and mocked model responses. If the port is occupied, choose a
 7. Global paste now preserves all editable fields. Keep the browser regression: normal input/textarea/contenteditable paste must not create a document. The research page has one composer with explicit ask/action modes, not duplicated forms.
 
 ## Feature modification patterns
+- Context is server-owned: reject client role history and private payload keys. Validate workspace/project/purpose/exact source-set and object metadata before a provider call. Queue captures conversation signatures and parent identity; retries preserve failed attempts with separate internal attempt turn IDs. A final saved workflow wins a later cancellation so successful context and archiving can finish. Do not complete an outer action assistant merely because one nested tool saved a record.
+- Keep current manual content authoritative for revision bases. Meetings compare the original record again under token/store guards before save; workflow revisions create a child and reject a parent changed during generation. Expose context truncation. Failed/cancelled rounds do not enter successful model context. Record-only JSON backups and OneDrive record mirrors exclude conversations; conversation JSON backup and release database backup are separate.
+- Stage logs describe observable actions, never raw prompts/tool arguments/credentials or private model reasoning. ETA is a preset task-type range, not a measured SLA. Use an indeterminate bar when no real stage percentage exists. Polling updates dedicated UI regions without clearing inputs; refresh recovers active operations without resending model requests.
+- Output roots/aliases/bindings and export receipts live only in runtime JSON/SQLite. Match folder names within bounded scans, requiring explicit local selection for ambiguity. Confine writes/downloads to configured roots or managed storage; reject traversal, links, junctions and unknown reparse points. Only documented Microsoft Cloud Files tags are allowed as non-link OneDrive placeholders. Immutable version directories and hash manifests retain old bytes. Archive failure preserves the saved record; retry exports separately.
 - Data additions: update [Store](<../workos/store.py>) schema/defaults/validation and test older records plus backup/restore. Meeting structured fields must have valid dimensions/indices; changing only summary intentionally invalidates stale structures.
 - [Organization](<../workos/organization.py>) derives task_group/material_type/version_family/version_label locally from bounded filename/content evidence. Store runs it on create/update/startup/restore and custom subtask changes. Explicit task_group is a manual override; clearing it resumes automation. No new collection was added, so old version-1 backup topology remains valid. Never include memory or execute source instructions. Version families are project-scoped; recent import order is not semantic approval or finality.
 - [Attachments](<../workos/attachments.py>) validates workspace and hash-only paths, verifies hashes on download/restore and keeps original bytes independent of edited text. Mirror sync deduplicates hashes and caches stat signatures to skip unchanged immutable originals during normal saves. Missing mirror originals are retried on subsequent sync; status counts missing bytes by workspace.

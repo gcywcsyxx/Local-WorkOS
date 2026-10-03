@@ -1,11 +1,12 @@
 """AI-native action layer: the model acts through a small, auditable tool set."""
 from __future__ import annotations
+from contextlib import nullcontext
 import hashlib
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from .cancellation import check_cancelled, record_step
+from .cancellation import check_cancelled, record_step, report_progress
 
 AGENT_TOOLS = [
     {'name': 'import_text', 'description': '把一段文本保存为研究资料（source note）。参数: title, content, project_id 可选。'},
@@ -114,7 +115,11 @@ def _agent_tool_result(name, args, store, project_id='', app=None, context=None)
             raise ValueError('模型未返回纪要正文，原会议未修改')
         payload = {key: draft[key] for key in ('summary', 'experts', 'matrix', 'contents') if key in draft}
         check_cancelled()
-        saved = store.update('meetings', meeting_id, payload)
+        token = getattr(store, 'token', None)
+        with (token.guard() if token else nullcontext()), store.lock:
+            if store.get('meetings', meeting_id) != meeting:
+                raise ValueError('会议记录在生成期间已变更；没有覆盖现有纪要，请重新整理')
+            saved = store.update('meetings', meeting_id, payload)
         return {'id': saved['id'], 'summary': saved['title'], 'export_formats': ['docx', 'pdf']}
     if name == 'import_text':
         content = str(args.get('content') or '').strip()
@@ -194,15 +199,17 @@ def agent_turn(self, store, body):
     context['message'] = message
     tools_text = '\n'.join('- ' + tool['name'] + '：' + tool['description'] for tool in AGENT_TOOLS)
     transcript = [{'role': 'system', 'content': AGENT_SYSTEM + '\n\n可用工具：\n' + tools_text}]
-    # Client-side history can contain local-only memory answers and has no verified
-    # source provenance. Keep it on screen; send only the current explicit task
-    # and this request's validated server tool results to the model.
+    # Only scoped server-verified completed turns enter model context. Arbitrary
+    # client history can contain local-only memory and is deliberately ignored.
+    for item in (body.get('_context') or {}).get('messages',[]):
+        transcript.append({'role':item['role'],'content':item['content']})
     transcript.append({'role': 'user', 'content': message + '\n\n当前项目编号：' + project_id +
                        '\n明确选择的资料编号：' + json.dumps(context['document_ids']) +
                        '\n明确选择的会议编号：' + str(context.get('meeting_id') or '')})
     steps = []
-    for _ in range(6):
+    for round_index in range(6):
         check_cancelled()
+        report_progress('generate',f'行动助手第{round_index+1}轮：根据当前要求选择下一步')
         payload = {'model': model, 'messages': transcript, 'temperature': 0.2, 'max_tokens': 1200,
                    'response_format': {'type': 'json_object'}}
         headers = {'Content-Type': 'application/json'}
@@ -234,11 +241,13 @@ def agent_turn(self, store, body):
         if action == 'final' or action is None:
             check_cancelled()
             return {'answer': str(decision.get('answer') or '').strip() or '已完成。', 'steps': steps, 'model': model}
+        report_progress('action','正在执行已允许的工作操作：'+str(action)[:80])
         result = _agent_tool_result(action, decision.get('args') or {}, store, project_id, self, context)
         step = {'action': action, 'args': decision.get('args') or {}, 'result': result, 'say': str(decision.get('say') or '')}
         steps.append(step)
         # Keep the receipt even when Stop races with a completed mutation.
         record_step(step)
+        if hasattr(self,'archive_agent_step'):self.archive_agent_step(store,step)
         transcript.append({'role': 'assistant', 'content': json.dumps(decision, ensure_ascii=False)})
         transcript.append({'role': 'user', 'content': '工具 ' + str(action) + ' 的结果：' + json.dumps(result, ensure_ascii=False)[:4000] + '\n请继续：要么执行下一个动作，要么用 final 汇总。'})
     check_cancelled()

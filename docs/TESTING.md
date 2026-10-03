@@ -4,6 +4,14 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.7.0 contextual revisions, progress and output folders, 2026-10-04
+
+- Real isolated HTTP tests cover two-turn question/meeting/model/workflow/job context, workspace/project/purpose/source isolation, current manual revision bases, parent preservation, restart/retry and stale queued context. Held-provider fixtures verify factual progress/ETA and cancellation before/after final commit. Failed attempts remain visible without becoming successful context.
+- Temporary project directories verify unique/ambiguous matching, immutable exports and idempotent retries, readable Word/PPT/Excel, authenticated manifest downloads, local-only root/binding writes, and no model call on export retry. Simulated Windows metadata covers all16 documented Cloud Files tags while rejecting symlinks, junctions and unknown tags; no business directories are written by tests.
+- Chrome uses a fresh synthetic profile/database and mocked providers for stable progress regions, multi-round ask/new chat/scope changes, explicit history recovery, recovered active operations without resend or draft loss, saved edits before new workflow revisions, edited valuation assumptions, meeting instructions/transcript fidelity, archive retry/download/binding and mobile layout.
+- Times are estimates by task type; stage logs and context routing do not certify factual answer quality. Suite totals and the release revision are recorded by each SOP execution.
+- A genuine DeepSeek compatible-bridge canary used only temporary synthetic records: two ask rounds retained a work reference; two workflow rounds retained current manual edits, revenue numbers and actual/forecast distinctions, created revision2 without changing the parent, and generated readable HTML/DOCX/PPTX/Markdown versions. This checks this bounded case, not overall factual accuracy or bridge model identity independently.
+
 ### 1.6.1 selected-model ask on lexical misses, 2026-10-04
 
 - Twelve real loopback HTTP regressions use synthetic provider responses: all four provider paths are invoked once on a lexical miss or empty text, keep the selected model, report actual model_called/retrieval_basis, and reject nonexistent source tags. Scope, memory, cross-workspace, model allowlists, CSRF, cancellation and no automatic save remain enforced. Generic requests longer than3000 characters now follow the documented4000-character limit.

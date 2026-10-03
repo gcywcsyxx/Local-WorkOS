@@ -1,6 +1,7 @@
 """Grounded investment work recipes; source text never grants tool authority."""
 from __future__ import annotations
 import re
+from contextlib import nullcontext
 
 RECIPES = {
     'brief': ('研究简报', '围绕核心研究问题生成有来源的结论、证据、风险和核实事项。', '研究简报', True,
@@ -253,6 +254,21 @@ def run_workflow(app, store, body, progress=None):
                       ('仅摘录' if item['truncated'] else '全部已提取文字') for item in coverage) +
             '\n\n不可信资料证据：\n' + '\n\n'.join(sources) +
             ('\n\n已有项目记录（不是当周变化的证明）：\n' + context if context else ''))
+    if body.get('_context_text'):
+        user += '\n\n同一工作对话的历史（旧草稿未经核验，旧引用编号不可直接复用）：\n' + body['_context_text']
+    parent = None
+    if body.get('revision_of'):
+        parent = body.get('_revision_base') or store.get('deliverables', body['revision_of'])
+        if parent.get('project_id', '') != project_id:
+            raise ValueError('只能修订当前项目的草稿')
+        if parent.get('method'):
+            raise ValueError('结构化模型请在模型页修订假设并重算，不用文字修订覆盖模型')
+        base = str(parent.get('body') or '')
+        if len(base) > 100000:
+            raise ValueError('原稿超过本次修订范围，请先缩小草稿')
+        user += ('\n\n本次是修订工作。以下是用户当前编辑并保存的原稿，不能当作独立事实来源；'
+                 '按最新要求修改，保留无须改动的内容，返回完整修订正文，重新以本轮选定材料核对引用。'
+                 '\n当前原稿：\n' + base)
     from .quality import assess_output, critic_request, parse_critic_result, repair_brief
     step('generate', '根据用户范围和选定证据生成正文')
     harness = {'name': 'WorkOS bounded quality workflow', 'execution': 'scoped_model_calls', 'tool_counts': {}}
@@ -267,6 +283,8 @@ def run_workflow(app, store, body, progress=None):
         native_user = ('用户要求：\n' + message + '\n\n本次选定来源目录（文字须通过资料工具读取）：\n' +
                        '\n'.join('[' + row['source_id'] + '] ' + row['title'] + '，' + str(row['total_chars']) + '字' for row in coverage) +
                        ('\n\n已提供项目记录（不是当周变化的证明）：\n' + context if context else ''))
+        if body.get('_context_text'): native_user += '\n\n同一工作对话历史（未经核验）：\n' + body['_context_text']
+        if parent: native_user += '\n\n按最新要求修订以下当前原稿并返回完整正文；原稿不是独立证据，旧引用编号不可直接复用：\n' + base
         answer, harness = app.dsh_harness_answer(system, native_user, model, docs, coverage, dsh_progress)
         model_name, mode = DSH_MODELS[model][0] + ' via DSH', 'dsh'
         if harness.get('coverage'): coverage = harness['coverage']
@@ -345,9 +363,24 @@ def run_workflow(app, store, body, progress=None):
                  '\n\n## 来源与资料覆盖\n\n' + ('\n'.join(source_lines) if source_lines else '- 用户工作要求与可选项目登记；未进行独立事实核验。'))
     project = store.get('projects', project_id) if project_id else {}
     step('save', '保存正文、来源覆盖和质量检查记录')
-    record = store.create('deliverables', {'title': (project.get('name', '') + ' · ' + title).strip(' ·')[:200],
-        'kind': kind, 'project_id': project_id, 'body': full_body, 'workflow_key': key,
-        'source_ids': [doc['id'] for doc in docs], 'coverage': coverage, 'quality_report': report})
+    token = getattr(store, 'token', None)
+    target = getattr(store, 'real', store)
+    frozen = hasattr(store, 'snapshot') and hasattr(store, 'generation_id')
+    # FrozenStore already owns the atomic final-save boundary. Avoid extending
+    # its commit lock into post-save callbacks or Stop recovery.
+    with (token.guard() if token and not frozen else nullcontext()), ((getattr(target, 'lock', None) or nullcontext()) if not frozen else nullcontext()):
+        if parent and store.get('deliverables', parent['id']) != parent:
+            raise ValueError('原稿在生成期间已修改，请基于当前正文重新修订')
+        record = store.create('deliverables', {'title': (project.get('name', '') + ' · ' + title).strip(' ·')[:200],
+            'kind': kind, 'project_id': project_id, 'body': full_body, 'workflow_key': key,
+            'source_ids': [doc['id'] for doc in docs], 'coverage': coverage, 'quality_report': report,
+            'revision_of': parent['id'] if parent else '',
+            'revision_number': int(parent.get('revision_number', 1)) + 1 if parent else 1,
+            'conversation_id': body.get('conversation_id') or ''})
+        # Final top-level save wins a later Stop; its successful history and
+        # archive still need finishing. A nested action assistant stays stoppable.
+        if token and token.execution.get('kind') == 'workflow':
+            token.status = 'completed'
     return {'answer': full_body, 'body': full_body, 'title': record['title'], 'id': record['id'],
             'deliverable_id': record['id'], 'deliverable': record, 'workflow_key': key,
             'source_ids': record['source_ids'], 'coverage': coverage, 'citations': citations,

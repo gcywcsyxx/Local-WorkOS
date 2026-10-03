@@ -130,6 +130,43 @@ class AgentCancellationTests(unittest.TestCase):
         self.assertEqual(self.app.meeting_draft.call_count, 1)
         self.assertEqual(self.real.get('meetings', meeting['id'])['summary'], 'Original summary')
 
+    def test_manual_meeting_edits_during_provider_are_preserved(self):
+        for field in ('summary', 'transcript'):
+            for guarded in (False, True):
+                with self.subTest(field=field, cancellation_store=guarded):
+                    meeting = self.real.create('meetings', {'title': 'Synthetic meeting',
+                        'project_id': self.project['id'], 'transcript': 'Synthetic transcript',
+                        'summary': 'Original summary'})
+
+                    def draft(*_args):
+                        self.real.update('meetings', meeting['id'], {field: 'User saved manual edit'})
+                        return {'summary': 'Late generated summary', 'experts': []}
+
+                    self.app.meeting_draft.side_effect = draft
+                    with self.assertRaisesRegex(ValueError, '生成期间已变更'), bind_token(self.token):
+                        _agent_tool_result('generate_minutes', {}, self.store if guarded else self.real,
+                            self.project['id'], self.app, {'meeting_id': meeting['id'], 'provider': 'deepseek'})
+                    current = self.real.get('meetings', meeting['id'])
+                    self.assertEqual(current[field], 'User saved manual edit')
+                    if field == 'transcript': self.assertEqual(current['summary'], 'Original summary')
+                    self.assertEqual(self.token.steps, [])
+
+    def test_saved_minutes_do_not_complete_the_outer_multi_action_operation(self):
+        meeting = self.real.create('meetings', {'title': 'Synthetic meeting', 'project_id': self.project['id'],
+            'transcript': 'Synthetic transcript', 'summary': 'Original summary'})
+        self.app.meeting_draft.return_value = {'summary': 'Generated synthetic summary'}
+        self.token.status = 'running'
+        with bind_token(self.token):
+            result = _agent_tool_result('generate_minutes', {}, self.store, self.project['id'], self.app,
+                {'meeting_id': meeting['id'], 'provider': 'deepseek'})
+        self.assertEqual(self.real.get('meetings', meeting['id'])['summary'], 'Generated synthetic summary')
+        self.assertEqual(result['id'], meeting['id'])
+        self.assertEqual(self.token.status, 'running')
+        self.assertEqual(self.token.steps[0]['result']['id'], meeting['id'])
+        self.token.cancel()
+        self.assertEqual(self.token.status, 'cancelled')
+        self.assertEqual(self.real.get('meetings', meeting['id'])['summary'], 'Generated synthetic summary')
+
 
 if __name__ == '__main__':
     unittest.main()

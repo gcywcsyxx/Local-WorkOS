@@ -30,6 +30,12 @@ def main():
     _, ui = get('http://127.0.0.1:18866/app.js')
     if b'ai-run-controls' not in shell or b'X-WorkOS-Request-ID' not in ui or b'bindAiComposer' not in ui:
         raise ValueError('The installed keyboard and stop controls are unavailable')
+    for route, key in (('/api/operations', 'operations'), ('/api/conversations', 'conversations'), ('/api/artifacts/config', 'roots')):
+        _, body = get('http://127.0.0.1:18866' + route)
+        if not isinstance(json.loads(body).get(key), list):
+            raise ValueError('The installed contextual AI or archive API is unavailable')
+    if b'renderConversation' not in ui or b'execution-record' not in ui or b'renderArchiveReceipt' not in ui:
+        raise ValueError('The installed contextual AI or archive UI is unavailable')
     origin = env.get('WORKOS_PUBLIC_ORIGIN', '').rstrip('/')
     _, body = get('http://127.0.0.1:18866/api/sync/status')
     sync = json.loads(body)
@@ -55,7 +61,7 @@ def main():
                     raise ValueError('Anonymous API denial returned an unexpected status') from None
             else:
                 raise ValueError('Anonymous public workspace access was allowed')
-    print(json.dumps({'local_workflows': 'ok', 'session_recovery_client': 'ok', 'ai_keyboard_and_stop_controls': 'ok', 'public_login_and_anonymous_denial': 'ok' if origin else 'not-configured'}))
+    print(json.dumps({'local_workflows': 'ok', 'session_recovery_client': 'ok', 'ai_keyboard_and_stop_controls': 'ok', 'context_progress_archives': 'ok', 'public_login_and_anonymous_denial': 'ok' if origin else 'not-configured'}))
 
 
 if __name__ == '__main__':

@@ -187,8 +187,7 @@ class ModelRecordHttpTests(unittest.TestCase):
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(3)
-        for store in self.app.stores.values():
-            store.close()
+        self.app.close()
 
     def request(self, method, path, body=None):
         headers = {'X-Workspace': 'personal', 'X-CSRF-Token': self.app.csrf}

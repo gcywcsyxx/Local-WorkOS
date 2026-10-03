@@ -27,7 +27,7 @@ FIELDS = {
 }
 for _collection_name in ORGANIZED_COLLECTIONS:
  FIELDS[_collection_name] |= ORGANIZATION_FIELDS
-FIELDS['deliverables'] |= MODEL_FIELDS | WORKFLOW_FIELDS | {'quality_report','generation_id'}
+FIELDS['deliverables'] |= MODEL_FIELDS | WORKFLOW_FIELDS | {'quality_report','generation_id','revision_of','revision_number','conversation_id'}
 for _collection_name in ('documents','meetings','notes','deliverables'):
  FIELDS[_collection_name].add('review_comments')
 ENUMS = {
@@ -49,7 +49,7 @@ DEFAULTS = {
 }
 for _collection_name in ORGANIZED_COLLECTIONS:
  DEFAULTS[_collection_name].update(EMPTY_ORGANIZATION)
-DEFAULTS['deliverables'].update(method='',assumptions={},result={},workflow_key='',source_ids=[],coverage=[],quality_report={},generation_id='')
+DEFAULTS['deliverables'].update(method='',assumptions={},result={},workflow_key='',source_ids=[],coverage=[],quality_report={},generation_id='',revision_of='',revision_number=1,conversation_id='')
 for _collection_name in ('documents','meetings','notes','deliverables'):
  DEFAULTS[_collection_name]['review_comments']=[]
 
@@ -110,7 +110,14 @@ class Store:
   extra=set(obj)-allowed
   if extra: raise ValueError('存在不支持的字段：'+', '.join(sorted(extra)))
   for key,value in obj.items():
-   if col=='deliverables' and key=='quality_report':
+   if col=='deliverables' and key=='revision_number':
+    if type(value) is not int or not 1<=value<=100000:raise ValueError('草稿版本号不正确')
+   elif col=='deliverables' and key in ('revision_of','conversation_id'):
+    if not isinstance(value,str) or (value and not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}',value)):raise ValueError('修订或对话编号不正确')
+    if key=='revision_of' and value and not internal:
+     parent=self.get('deliverables',value)
+     if parent.get('project_id','')!=obj.get('project_id',''):raise ValueError('修订稿必须与原稿属于同一项目')
+   elif col=='deliverables' and key=='quality_report':
     validate_object(value,'质量检查结果')
     if value:value['facts_verified']=False
    elif col=='deliverables' and key=='generation_id':
@@ -303,8 +310,10 @@ class Store:
      if table=='activity': continue
      if any(obj.get(key)==id for obj in self.list(table)):
       raise ValueError('该记录仍有关联内容，请先取消关联后删除')
-    if col=='documents' and any(id in obj.get('source_ids',[]) for obj in self.list('deliverables')):
-     raise ValueError('该资料仍被交付物引用，请先取消关联后删除')
+   if col=='documents' and any(id in obj.get('source_ids',[]) for obj in self.list('deliverables')):
+    raise ValueError('该资料仍被交付物引用，请先取消关联后删除')
+   if col=='deliverables' and any(id==obj.get('revision_of') for obj in self.list('deliverables')):
+    raise ValueError('该草稿仍有修订版本，不能删除原稿')
    self.db.execute('DELETE FROM records WHERE collection=? AND id=?',(col,id))
    if col=='tasks' and record.get('project_id') and record.get('task_group_source')=='manual':self._organize_existing(record['project_id'])
    if col!='activity': self._log('删除 '+record.get('name',record.get('title','')),'')
@@ -344,6 +353,9 @@ class Store:
    if col=='activity':continue
    for obj in items:
     if col=='deliverables':
+     if obj.get('revision_of'):
+      parent=lookup['deliverables'].get(obj['revision_of'])
+      if not parent or parent['id']==obj['id'] or parent.get('project_id','')!=obj.get('project_id',''):raise ValueError('备份含失效或跨项目修订关联')
      for source_id in obj.get('source_ids',[]):
       source=lookup['documents'].get(source_id)
       if not source:raise ValueError('备份含失效资料来源')

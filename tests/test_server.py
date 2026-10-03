@@ -32,8 +32,7 @@ class ServerTests(unittest.TestCase):
         self.addCleanup(self.stop_server)
 
     def close_stores(self):
-        for store in self.app.stores.values():
-            store.close()
+        self.app.close()
 
     def stop_server(self):
         self.httpd.shutdown()

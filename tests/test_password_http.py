@@ -16,7 +16,7 @@ class PasswordHttpTests(unittest.TestCase):
         self.thread=threading.Thread(target=self.httpd.serve_forever,kwargs={"poll_interval":.02},daemon=True);self.thread.start()
     def tearDown(self):
         self.httpd.shutdown();self.httpd.server_close();self.thread.join(3)
-        for store in self.app.stores.values():store.close()
+        self.app.close()
         self.tmp.cleanup()
     def request(self,path,method="GET",body=None,public=True,cookie="",csrf="",extra=None):
         h={"X-Workspace":"demo"}

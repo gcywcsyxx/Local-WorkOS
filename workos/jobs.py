@@ -16,12 +16,14 @@ from concurrent.futures import ThreadPoolExecutor
 from .store import now
 from .workflows import RECIPES, _selected_documents, _project_context, provider_identity
 from .cancellation import CancellationToken, OperationRegistry, CancelledError, bind_token, check_cancelled
+from .ai_progress import new_execution, add_event, finish_execution, public_execution
 
 STAGES = [('prepare', '准备资料'), ('generate', '生成正文'), ('check', '检查要求'),
           ('review', '复核内容'), ('repair', '修订问题'), ('save', '保存草稿')]
 ACTIVE = ('queued', 'running')
 PUBLIC_FIELDS = {'workflow_key', 'key', 'message', 'question', 'project_id', 'document_ids',
-                 'mode', 'provider', 'model_id', 'quality_mode', 'request_id', 'sender_name'}
+                 'mode', 'provider', 'model_id', 'quality_mode', 'request_id', 'sender_name',
+                 'conversation_id', 'revision_of'}
 
 
 def _encoded(value):
@@ -81,10 +83,15 @@ class FrozenStore:
         with (self.token.guard() if self.token else nullcontext()), self.real.lock:
             saved = next((row for row in self.real.list('deliverables')
                           if row.get('generation_id') == self.generation_id), None)
-            if saved:
-                return saved
-            self.validate_current()
-            return self.real.create(collection, {**data, 'generation_id': self.generation_id})
+            if not saved:
+                self.validate_current()
+                saved=self.real.create(collection, {**data, 'generation_id': self.generation_id})
+            # This is the workflow's final commit. Stop may acknowledge the
+            # saved result, but must not cancel its successful context append.
+            if self.token:
+                self.token.status='completed'
+                self.token.completed_metadata.update(deliverable_id=saved['id'],saved=True)
+            return saved
 
 
 class WorkflowJobs:
@@ -129,9 +136,14 @@ class WorkflowJobs:
                 'source_ids': record.get('source_ids', []), 'coverage': record.get('coverage', []),
                 'citations': [], 'question': state['message'], 'project_id': state['project_id'],
                 'model': state['model_id'], 'mode': state['mode'],
+                'conversation_id':record.get('conversation_id') or state.get('conversation_id') or '',
                 'warning': '已恢复已保存的草稿；事实仍需核实。'}
 
     def _write(self, job_id, state):
+        execution=state.setdefault('_execution',new_execution('workflow',state.get('model_id',''),state.get('quality_mode','fast'),
+            status=state['status'],planned_stages=[key for key,_ in STAGES]))
+        execution['stage_statuses']={item['key']:item['status'] for item in state['stages']}
+        if state['status'] in ('completed','cancelled','failed','interrupted'):finish_execution(execution,state['status'])
         state['updated_at'] = now()
         state['revision'] = state.get('revision', 0) + 1
         with self.db:
@@ -146,12 +158,18 @@ class WorkflowJobs:
 
     def get(self, workspace, job_id):
         with self.lock:
-            return self._row(workspace, job_id)[2]
+            return self._public(self._row(workspace, job_id)[2])
+
+    def _public(self,state):
+        result=copy.deepcopy(state)
+        execution=result.pop('_execution',None)
+        if execution:result.update(public_execution(execution,state['status']))
+        return result
 
     def list(self, workspace):
         if workspace not in self.app.stores: raise ValueError('工作区选择不正确')
         with self.lock:
-            return [json.loads(row[0]) for row in self.db.execute(
+            return [self._public(json.loads(row[0])) for row in self.db.execute(
                 'SELECT state FROM jobs WHERE workspace=? ORDER BY rowid DESC LIMIT 30', (workspace,))]
 
     def _capture(self, workspace, body):
@@ -165,6 +183,9 @@ class WorkflowJobs:
             raise ValueError('质量模式无效')
         if body.get('mode', 'deepseek') not in ('deepseek', 'local-models', 'model', 'dsh'):
             raise ValueError('请选择可用的AI模型')
+        conversation_id=body.get('conversation_id','')
+        if not isinstance(conversation_id,str) or len(conversation_id)>100:
+            raise ValueError('对话编号无效')
         store = self.app.stores[workspace]
         with store.lock:
             project_id, docs = _selected_documents(store, body)
@@ -187,9 +208,33 @@ class WorkflowJobs:
                 source_ids = {entry['record'].get('document_id') for entry in records[:40] if entry['record'].get('document_id')}
                 snapshot['context_sources'] = [{'id': source_id, 'identity': _identity(store.get('documents', source_id))}
                                                for source_id in sorted(source_ids)]
+            revision_of=body.get('revision_of')
+            if revision_of:
+                if not isinstance(revision_of,str) or len(revision_of)>100:raise ValueError('修订母稿编号无效')
+                parent=store.get('deliverables',revision_of)
+                if parent.get('project_id','')!=project_id:raise ValueError('修订母稿不属于当前项目')
+                selected_ids={doc['id'] for doc in docs}
+                if not set(parent.get('source_ids',[])).issubset(selected_ids):
+                    raise ValueError('修订母稿引用了未选择的资料；请明确选择原资料后修订')
+                snapshot['deliverables']=[parent]
+                snapshot.setdefault('context_records',[]).append({'collection':'deliverables','record':parent})
             if len(_encoded(snapshot).encode()) > 12_000_000:
                 raise ValueError('本次选定资料超过后台任务12MB文字预算，请分批研究；未截断或发送资料')
+        # Conversation validation calls the real Store. Keep its lock outside
+        # Store.lock to preserve append's conversation -> Store lock order.
+        if conversation_id and hasattr(self.app,'conversations'):
+            scope={'project_id':project_id,'purpose':'workflow','source_ids':[doc['id'] for doc in docs]}
+            snapshot['conversation']={'id':conversation_id,**scope,
+                'signature':self.app.conversations.signature(workspace,conversation_id,**scope)}
         return snapshot
+
+    def _check_conversation(self,workspace,snapshot):
+        conversation=snapshot.get('conversation')
+        if not conversation:return
+        current=self.app.conversations.signature(workspace,conversation['id'],project_id=conversation['project_id'],
+            purpose=conversation['purpose'],source_ids=conversation['source_ids'])
+        if current!=conversation['signature']:
+            raise ValueError('任务对话已新增成功轮次或改变，请重新提交任务；没有使用后来的上下文')
 
     def _capacity(self):
         if self.closed: raise ValueError('服务正在关闭，请稍后重试')
@@ -210,7 +255,7 @@ class WorkflowJobs:
                                        (workspace, request_id)).fetchone()
             if existing:
                 if existing[0] != fingerprint: raise ValueError('请求编号已用于不同工作要求，请创建新任务')
-                return json.loads(existing[1])
+                return self._public(json.loads(existing[1]))
             self._capacity()
             token = self.cancellations.token(workspace, request_id)
             token.check()
@@ -222,36 +267,46 @@ class WorkflowJobs:
                      'document_ids': [doc['id'] for doc in snapshot['documents']],
                      'model_id': body.get('model_id') or '', 'mode': body.get('mode') or 'deepseek',
                      'quality_mode': body.get('quality_mode') or 'fast', 'status': 'queued', 'stage': 'prepare',
+                     'conversation_id':body.get('conversation_id') or '', 'revision_of':body.get('revision_of') or '',
+                     'attempt':1,
                      'stages': [{'key': key, 'label': label, 'status': 'pending', 'detail': ''} for key, label in STAGES],
                      'revision': 1, 'created_at': now(), 'updated_at': now(), 'error': '', 'retryable': False,
                      'poll_after_ms': 1500}
+            state['_execution']=new_execution('workflow',state['model_id'],state['quality_mode'],status='queued',
+                planned_stages=[key for key,_ in STAGES])
+            add_event(state['_execution'],'queued','已进入后台任务队列','queued')
             with self.db:
                 self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',
                     (job_id, workspace, request_id, fingerprint, encoded, _encoded(snapshot), _encoded(state)))
             self.tokens[job_id] = token
             token.pinned = True
             self.executor.submit(self._execute, workspace, job_id)
-            return copy.deepcopy(state)
+            return self._public(state)
 
     def retry(self, workspace, job_id):
         with self.lock:
             payload, snapshot, state = self._row(workspace, job_id)
             payload['_provider_identity'] = snapshot.get('provider_identity')
             if state['status'] not in ('failed', 'interrupted'):
-                return state
+                return self._public(state)
             saved = self._saved(workspace, job_id)
             if saved:
                 state.update(status='completed', result=self._recover(saved, state), error='', retryable=False)
                 self._write(job_id, state)
-                return state
+                return self._public(state)
             self._capacity()
+            self._check_conversation(workspace,snapshot)
             FrozenStore(self.app.stores[workspace], snapshot, job_id).validate_current()
             state.update(status='queued', stage='prepare', error='', retryable=False)
+            state['attempt']=state.get('attempt',1)+1
             state['stages'] = [{'key': key, 'label': label, 'status': 'pending', 'detail': ''} for key, label in STAGES]
+            state['_execution']=new_execution('workflow',state['model_id'],state['quality_mode'],status='queued',
+                planned_stages=[key for key,_ in STAGES])
+            add_event(state['_execution'],'queued','重试原任务，等待运行','queued')
             self._write(job_id, state)
             self.tokens[job_id] = CancellationToken(payload['request_id'])
             self.executor.submit(self._execute, workspace, job_id)
-            return copy.deepcopy(state)
+            return self._public(state)
 
     def cancel_request(self, workspace, request_id):
         from .cancellation import validate_request_id
@@ -268,12 +323,12 @@ class WorkflowJobs:
         # FrozenStore.create never acquires jobs.lock inside Store.lock.
         with self.lock:
             state = self._row(workspace, job_id)[2]
-            if state['status'] not in ACTIVE: return state
+            if state['status'] not in ACTIVE: return self._public(state)
             token = self.tokens.get(job_id)
         if token: token.cancel()
         with self.lock:
             state = self._row(workspace, job_id)[2]
-            if state['status'] not in ACTIVE: return state
+            if state['status'] not in ACTIVE: return self._public(state)
             saved = self._saved(workspace, job_id)
             if saved:
                 state.update(status='completed', result=self._recover(saved, state), error='', retryable=False)
@@ -285,7 +340,7 @@ class WorkflowJobs:
             self._write(job_id, state)
             if token: token.pinned = False
             self.tokens.pop(job_id, None)
-            result = copy.deepcopy(state)
+            result = self._public(state)
         if saved: self.app.sync_workspace(workspace)
         return result
 
@@ -302,7 +357,20 @@ class WorkflowJobs:
                 elif item['status'] == 'running' and status == 'running':
                     item['status'] = 'completed'
             state.update(status='running', stage=stage)
+            execution=state.setdefault('_execution',new_execution('workflow',state['model_id'],state['quality_mode'],
+                status='running',planned_stages=[key for key,_ in STAGES]))
+            add_event(execution,stage,detail,status)
             self._write(job_id, state)
+
+    def _trace(self,workspace,job_id,stage,detail='',status='running'):
+        check_cancelled()
+        with self.lock:
+            if self.closed:raise ValueError('服务重启中断了任务；未保存后台结果')
+            state=self._row(workspace,job_id)[2]
+            if state['status']=='completed':return
+            if state['status'] not in ACTIVE:raise CancelledError()
+            add_event(state['_execution'],stage,detail,status)
+            self._write(job_id,state)
 
     def _execute(self, workspace, job_id):
         from .workflows import run_workflow
@@ -311,21 +379,48 @@ class WorkflowJobs:
             payload, snapshot, state = self._row(workspace, job_id)
             if state['status'] not in ACTIVE: return
             token = self.tokens.setdefault(job_id, CancellationToken(payload['request_id']))
+            token.progress_callback=lambda stage,detail='',status='running':self._trace(workspace,job_id,stage,detail,status)
             payload['_provider_identity'] = snapshot.get('provider_identity')
+            # A retry is a distinct visible conversation attempt, while the
+            # durable submission/cancellation identity and generation stay fixed.
+            if hasattr(self.app,'contextual_call'):
+                payload['request_id']='job-'+job_id+'-attempt-'+str(state.get('attempt',1))
+            if snapshot.get('conversation'):
+                payload['conversation_id']=snapshot['conversation']['id']
+                payload['_conversation_signature']=snapshot['conversation']['signature']
         try:
             frozen = FrozenStore(self.app.stores[workspace], snapshot, job_id, active_check=lambda: not self.closed, token=token)
             frozen.validate_current()
             if snapshot.get('provider_identity') != provider_identity(self.app, payload):
                 raise ValueError('模型服务配置已变更，请重新创建任务；没有自动切换模型')
+            self._check_conversation(workspace,snapshot)
             with bind_token(token):
                 with token.guard(): token.status = 'running'
-                result = run_workflow(self.app, frozen, payload,
-                    progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
+                def execute(prepared):
+                    context=prepared.get('_context')
+                    if context and prepared.get('conversation_id'):
+                        check_cancelled()
+                        with self.lock:
+                            if self.closed:raise ValueError('服务重启中断了任务；未保存后台结果')
+                            current=self._row(workspace,job_id)[2]
+                            if current['status'] not in ACTIVE:raise CancelledError()
+                            current['conversation_id']=prepared['conversation_id']
+                            if not snapshot.get('conversation'):
+                                snapshot['conversation']={'id':prepared['conversation_id'],'project_id':prepared.get('project_id',''),
+                                    'purpose':'workflow','source_ids':list(prepared.get('document_ids',[])),
+                                    'signature':context['context_signature']}
+                                with self.db:self.db.execute('UPDATE jobs SET snapshot=? WHERE id=?',(_encoded(snapshot),job_id))
+                            self._write(job_id,current)
+                    return run_workflow(self.app, frozen, prepared,
+                        progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
+                result = (self.app.contextual_call(workspace, 'workflow', frozen, payload, execute)
+                          if hasattr(self.app, 'contextual_call') else execute(payload))
             with self.lock:
                 if self.closed: return
                 state = self._row(workspace, job_id)[2]
                 if state['status'] not in ACTIVE: return
-                state.update(status='completed', stage='save', result=result, retryable=False, error='')
+                state.update(status='completed', stage='save', result=result, retryable=False, error='',
+                    conversation_id=result.get('conversation_id') or state.get('conversation_id',''))
                 for item in state['stages']:
                     if item['status'] == 'running': item['status'] = 'completed'
                     elif item['status'] == 'pending': item['status'] = 'skipped'

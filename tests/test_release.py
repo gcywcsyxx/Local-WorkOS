@@ -1,6 +1,7 @@
 """Deployment backups must capture active WAL without altering live private files."""
 from contextlib import closing
 from pathlib import Path
+import json
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
@@ -9,6 +10,23 @@ from tools.release_backup import backup
 
 
 class ReleaseBackupTests(unittest.TestCase):
+    def test_context_and_archive_ledgers_and_config_are_backed_up(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary); data = root / 'data'; data.mkdir()
+            names = ['conversations.sqlite3', 'project-artifacts.sqlite3']
+            for name in names:
+                with closing(sqlite3.connect(data / name)) as live:
+                    live.execute('CREATE TABLE records(value TEXT)')
+                    live.execute('INSERT INTO records VALUES (?)', (name,)); live.commit()
+            config = {'schema_version': 1, 'roots': [], 'bindings': {}, 'aliases': {}}
+            (data / 'project-artifacts.json').write_text(json.dumps(config), encoding='utf-8')
+            target = root / 'backup'
+            self.assertEqual(backup(data, target), names)
+            self.assertEqual(json.loads((target / 'project-artifacts.json').read_text()), config)
+            for name in names:
+                with closing(sqlite3.connect(target / name)) as restored:
+                    self.assertEqual(restored.execute('SELECT value FROM records').fetchone()[0], name)
+
     def test_active_wal_is_included_and_authentication_is_not_copied(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
