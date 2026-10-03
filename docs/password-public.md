@@ -12,7 +12,7 @@ The user-selected password mode is separate from Cloudflare Access. The origin l
 Start using `tools/start_public.py` from the installed app. It launches the application without opening a browser, verifies password enforcement and the origin configuration, and starts only the matching dedicated tunnel. It does not modify shared tunnels.
 
 ## Account
-Default username is `workos-user`. Set/change the password at `http://127.0.0.1:18866/auth/setup` on the host computer; the endpoint is forbidden through the tunnel even if Host is rewritten to localhost. This setup endpoint requires the local CSRF token. Password minimum 8 characters, recommended 12+; do not reuse a disclosed or shared password. Only the PBKDF2-SHA256 600,000-iteration salted hash is stored.
+New installations default to `workos-user`. Existing configured accounts retain their username, password hash and sessions; enter that username on the public login page. Set/change the password at `http://127.0.0.1:18866/auth/setup` on the host computer; the endpoint is forbidden through the tunnel even if Host is rewritten to localhost. This setup endpoint requires the local CSRF token. Password minimum 8 characters, recommended 12+; do not reuse a disclosed or shared password. Only the PBKDF2-SHA256 600,000-iteration salted hash is stored.
 
 Password hashes and hashed session identifiers are under the local application data directory, separate from OneDrive mirrors and repository source. No plaintext password or raw session token is persisted. Change/reset from the host computer invalidates existing sessions.
 

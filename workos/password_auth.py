@@ -1,5 +1,5 @@
 """Local hashed password account and opaque persistent HTTPS sessions."""
-import base64,hashlib,hmac,json,os,secrets,sqlite3,threading,time
+import base64,hashlib,hmac,json,os,re,secrets,sqlite3,threading,time
 from pathlib import Path
 from contextlib import contextmanager
 from http.cookies import SimpleCookie,CookieError
@@ -26,12 +26,14 @@ class PasswordAuth:
         try:
             data=json.loads(self.account_file.read_text(encoding="utf-8"))
             if not isinstance(data,dict):raise ValueError("Invalid account")
-            if data.get("username")!="workos-user" or data.get("iterations")!=self.iterations:raise ValueError("Invalid account")
+            if not isinstance(data.get("username"),str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}",data["username"]) or data.get("iterations")!=self.iterations:raise ValueError("Invalid account")
             if len(base64.b64decode(data["salt"],validate=True))!=16 or len(base64.b64decode(data["digest"],validate=True))!=32:raise ValueError("Invalid hash")
             self.account=data
         except (OSError,ValueError,KeyError,TypeError):pass
     @property
     def configured(self):return self.account is not None
+    @property
+    def username(self):return self.account["username"] if self.account else "workos-user"
     @property
     def generation(self):
         return hashlib.sha256((self.account["salt"]+self.account["digest"]).encode()).hexdigest() if self.account else ""
@@ -48,7 +50,7 @@ class PasswordAuth:
         if not isinstance(password,str) or not 8<=len(password)<=128 or not password.strip():raise ValueError("密码需8至128个字符，建议使用至少12字符的独立密码")
         salt=secrets.token_bytes(16)
         derived=hashlib.pbkdf2_hmac("sha256",password.encode(),salt,self.iterations)
-        data={"version":1,"username":"workos-user","iterations":self.iterations,"salt":base64.b64encode(salt).decode(),"digest":base64.b64encode(derived).decode()}
+        data={"version":1,"username":self.username,"iterations":self.iterations,"salt":base64.b64encode(salt).decode(),"digest":base64.b64encode(derived).decode()}
         with self.lock:
             self.directory.mkdir(parents=True,exist_ok=True)
             temp=self.account_file.with_name("password-account.tmp-"+secrets.token_hex(6))
@@ -77,7 +79,7 @@ class PasswordAuth:
             if not challenge or challenge[0]<=now or challenge[1]!=ip or not isinstance(cookie_nonce,str) or not hmac.compare_digest(nonce,cookie_nonce):raise PermissionError("登录会话已过期，请刷新登录页")
             if not isinstance(password,str) or len(password)>128:raise PermissionError("用户名或密码不正确")
             derived=hashlib.pbkdf2_hmac("sha256",password.encode(),base64.b64decode(self.account["salt"]),self.iterations)
-            correct=hmac.compare_digest(derived,base64.b64decode(self.account["digest"])) and username=="workos-user"
+            correct=hmac.compare_digest(derived,base64.b64decode(self.account["digest"])) and username==self.username
             if not correct:
                 self.failures.setdefault(ip,[]).append(now);self.global_failures.append(now)
                 raise PermissionError("用户名或密码不正确")
@@ -97,7 +99,7 @@ class PasswordAuth:
             db.execute("DELETE FROM sessions WHERE expires<=?",(self.clock(),))
             row=db.execute("SELECT csrf,expires,generation FROM sessions WHERE digest=?",(digest,)).fetchone()
         if row is None or not hmac.compare_digest(row[2],self.generation):return None
-        return {"csrf":row[0],"expires":row[1],"username":"workos-user"}
+        return {"csrf":row[0],"expires":row[1],"username":self.username}
     def logout(self,cookie_header):
         token=cookie_value(cookie_header,SESSION_COOKIE)
         if token:

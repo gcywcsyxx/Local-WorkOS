@@ -397,9 +397,9 @@ class Handler(BaseHTTPRequestHandler):
   else:
    nonce=self.app.password_auth.issue_challenge(self.auth_peer())
    self.response_headers={'Set-Cookie':self.app.password_auth.challenge_cookie(nonce)}
-  values={'__MODE__':'setup' if setup else 'login','__PUBLIC_URL__':self.app.public_origin or 'https://workos.example.com/','__NONCE__':nonce,'__HEADING__':'设置 WorkOS 新密码' if setup else '登录 WorkOS','__EXPLANATION__':'账号 workos-user。密码仅保存加盐哈希，请不要使用发在聊天中的密码。' if setup else ('输入账号密码即可进入工作区。' if self.app.password_auth.configured else '账号尚未初始化，请在这台电脑打开本机密码设置页。'),'__MIN_LENGTH__':'minlength="8"' if setup else '', '__AUTOCOMPLETE__':'new-password' if setup else 'current-password','__REMEMBER_HIDDEN__':'hidden' if setup else '', '__BUTTON__':'保存新密码' if setup else '登录','__FOOTNOTE__':'仅本机可设置或更改密码。' if setup else '登录会话受 HTTPS 和 HttpOnly Cookie 保护。'}
+  values={'__USERNAME__':self.app.password_auth.username if setup else '', '__USERNAME_READONLY__':'readonly' if setup else '', '__MODE__':'setup' if setup else 'login','__PUBLIC_URL__':self.app.public_origin or 'https://workos.example.com/','__NONCE__':nonce,'__HEADING__':'设置 WorkOS 新密码' if setup else '登录 WorkOS','__EXPLANATION__':'账号由本机配置。密码仅保存加盐哈希，请不要使用发在聊天中的密码。' if setup else ('输入账号密码即可进入工作区。' if self.app.password_auth.configured else '账号尚未初始化，请在这台电脑打开本机密码设置页。'),'__MIN_LENGTH__':'minlength="8"' if setup else '', '__AUTOCOMPLETE__':'new-password' if setup else 'current-password','__REMEMBER_HIDDEN__':'hidden' if setup else '', '__BUTTON__':'保存新密码' if setup else '登录','__FOOTNOTE__':'仅本机可设置或更改密码。' if setup else '登录会话受 HTTPS 和 HttpOnly Cookie 保护。'}
   page=(ROOT/'web'/'login.html').read_text(encoding='utf-8')
-  for marker,value in values.items():page=page.replace(marker,html.escape(value,quote=True) if marker not in ('__MIN_LENGTH__','__REMEMBER_HIDDEN__') else value)
+  for marker,value in values.items():page=page.replace(marker,html.escape(value,quote=True) if marker not in ('__MIN_LENGTH__','__REMEMBER_HIDDEN__','__USERNAME_READONLY__') else value)
   return self.respond(page,mime='text/html; charset=utf-8')
  def auth_post(self,path):
   self.headers_ok(authenticate=False)
@@ -415,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
    if self.remote_request:raise PermissionError('密码初始化只允许在本机进行')
    if not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),self.app.csrf):raise PermissionError('请刷新本机密码设置页')
    body=self.json_body();self.app.password_auth.configure_password(body.get('password'))
-   return self.respond({'ok':True,'username':'workos-user'})
+   return self.respond({'ok':True,'username':self.app.password_auth.username})
   if self.app.public_auth_mode!='password':raise PermissionError('账号密码登录未启用')
   if self.remote_request and self.headers.get('Origin')!=self.app.public_origin:raise PermissionError('登录请求必须来自本站HTTPS页面')
   body=self.json_body()
@@ -475,7 +475,7 @@ class Handler(BaseHTTPRequestHandler):
    mode=self.workspace();store=self.app.stores[mode]
    if path=='/api/bootstrap':
     boot=self.app.bootstrap(mode)
-    if self.password_session:boot['csrf']=self.password_session['csrf'];boot['auth']={'public_login':True,'username':'workos-user'}
+    if self.password_session:boot['csrf']=self.password_session['csrf'];boot['auth']={'public_login':True,'username':self.password_session['username']}
     return self.respond(boot)
    if path=='/api/agent/tools':
     from .agent import AGENT_TOOLS

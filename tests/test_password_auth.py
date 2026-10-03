@@ -49,3 +49,18 @@ class PasswordAuthTests(unittest.TestCase):
     def test_secure_cookie_attributes(self):
         cookie=self.auth.session_cookie("opaque",60)
         for flag in ("__Host-","Secure","HttpOnly","SameSite=Lax","Path=/"):self.assertIn(flag,cookie)
+    def test_existing_account_username_hash_and_session_survive_upgrade(self):
+        self.auth.configure_password(PASSWORD)
+        data=json.loads(self.auth.account_file.read_text())
+        data["username"]="legacy-account"
+        self.auth.account_file.write_text(json.dumps(data))
+        restarted=PasswordAuth(self.auth.directory,clock=lambda:self.now)
+        self.assertTrue(restarted.configured)
+        nonce=restarted.issue_challenge("synthetic-ip")
+        token,_=restarted.login("legacy-account",PASSWORD,"synthetic-ip",nonce,nonce)
+        cookie=SESSION_COOKIE+"="+token
+        again=PasswordAuth(self.auth.directory,clock=lambda:self.now)
+        self.assertEqual(again.get_session(cookie)["username"],"legacy-account")
+        again.configure_password("Another-Synthetic-Password!")
+        self.assertEqual(again.username,"legacy-account")
+        self.assertIsNone(again.get_session(cookie))

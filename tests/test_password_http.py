@@ -82,3 +82,20 @@ class PasswordHttpTests(unittest.TestCase):
     def test_uninitialized_public_account_cannot_login_or_read_data(self):
         self.assertEqual(self.request("/api/state")[0],401)
         self.assertEqual(self.login()[0],403)
+    def test_public_login_does_not_disclose_configured_username(self):
+        self.setup_password()
+        data=json.loads(self.app.password_auth.account_file.read_text())
+        data["username"]="legacy-account"
+        self.app.password_auth.account_file.write_text(json.dumps(data))
+        self.app.password_auth=PasswordAuth(self.app.password_auth.directory)
+        status,page,headers=self.request("/auth/login")
+        self.assertEqual(status,200)
+        self.assertNotIn(b"legacy-account",page)
+        self.assertIn(b'name="username" value=""',page)
+        nonce=re.search(rb'id="csrf" value="([^"]+)"',page).group(1).decode()
+        challenge=headers["Set-Cookie"].split(";")[0]
+        status,_,headers=self.request("/auth/login","POST",{"username":"legacy-account","password":PASSWORD},cookie=challenge,csrf=nonce)
+        self.assertEqual(status,200)
+        status,body,_=self.request("/api/bootstrap",cookie=headers["Set-Cookie"].split(";")[0])
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(body)["auth"]["username"],"legacy-account")

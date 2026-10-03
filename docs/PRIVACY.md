@@ -10,10 +10,12 @@ This repository contains application code, independently implemented report edit
 - Disable all implicit memory-root discovery; require explicit configuration by each user.
 - Exclude caches, data, databases, exports, credentials and logs through Git ignore rules.
 - Audit the actual Git-tracked file list and text, not just the working directory.
-- Use generic commit attribution, not a local real-name/email Git identity.
+- Use the repository owner’s verified GitHub username and GitHub-provided noreply email for commit attribution; never invent an address that could belong to another account.
 - Preserve required third-party copyright/license notices. Those public upstream notices are not the original user's private information.
 
 ## Ongoing responsibilities
+
+Run `python tools/check_public_privacy.py --history` before publishing. CI repeats this check on the full reachable history. It rejects common credential formats, personal home paths, private runtime files and non-noreply commit emails without printing matched values. For owner-specific names or domains, add private local denylist entries with `git config --add privacy.blockedLiteral VALUE`; never commit that list. Keep independently auditing with a dedicated secret scanner, because these checks cannot guarantee detection of every secret format or remove old cached GitHub views.
 
 Repository visibility does not make data entered into the app safe to share. Keep personal/runtime files out of commits. Markdown source filtering is best-effort; names, financial information or other sensitive content can remain after token filtering. Review report exports and backup files manually before sharing.
 

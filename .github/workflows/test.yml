@@ -5,6 +5,17 @@ on:
 permissions:
   contents: read
 jobs:
+  privacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Check tracked source and complete public history
+        run: python tools/check_public_privacy.py --history
   unit:
     runs-on: ${{ matrix.os }}
     strategy:

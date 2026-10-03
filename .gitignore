@@ -7,6 +7,8 @@ venv/
 node_modules/
 .env
 .env.*
+password-account.json
+sessions.sqlite3*
 *.sqlite
 *.sqlite3
 *.sqlite3-*
