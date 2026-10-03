@@ -4,6 +4,17 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.4.0 revision, 2026-10-04
+
+- Complete Python unit/HTTP suite runs on isolated temporary data; covers automatic grouping/old-record migration, immutable originals and delayed mirror recovery, explicit-source recipes and model failures, request retry/concurrency/workspace cache boundaries, memory boundaries, typed-model reopen/recompute/saved XLSX, annual LBO economics and online SQLite WAL backups. Three Windows real-symlink tests are skipped; simulated reparse checks still run.
+- 27 physical Chrome/CDP interaction groups passed using a new profile, synthetic records and mocked generation: home/project merge, single composer/drafts/scope, all material versions/subtasks/folder intake, recipe staging and saved drafts, source-less email, provider failure/retry IDs, meeting transcript protection, model restore/one-click scenario comparison, paste safety, citations and mobile overflow. Desktop/mobile screenshots were inspected; screenshot fixtures were not production records.
+- 14 Markdown groups and five login recovery groups passed. Raw HTML and unsafe links remain inert.
+- Three synthetic LBO workbooks were recalculated with the already configured native LibreOfficeKit, including direct edits to initial_cash/seller_rollover/exit_multiple/minimum_cash/cash_sweep_pct. All eight Summary metrics and each of four years' debt/cash/shortfall figures matched fresh Python results (relative tolerance 1e-8, absolute 1e-6); all 88 native formulas retained, no cached formula errors.
+- A live synthetic research recipe traversed the existing compatible bridge, produced and saved a readable three-row financial table with actual/forecast distinction, a follow-up question and valid source citation. A first run exposed excess template sections; prompt precedence was corrected and rerun. No private materials were sent; this is a bounded smoke test, not a general quality benchmark or independent verification of the bridge's model identity.
+- The release SOP separately verifies the installed version/commit, configured mirror, public account configuration, login page and anonymous API denial. Production passwords/cookies are not extracted. Remote Actions status is checked separately after push.
+
+### Historical baseline
+
 - 110 unit, storage, HTTP, parsing, retrieval, valuation, sync, DSH-boundary, memory-upload and export tests: 107 passed, 3 skipped because this Windows test account cannot create real symbolic links. Link/reparse rejection is also covered with simulated metadata tests.
 - The 1.0.0 baseline passed eight Playwright workflow groups. For 1.3.0, headless Chrome rendered the research and valuation routes, confirmed the paste-import control, the four valuation methods, and that no per-request consent checkbox remains; Playwright is not installed here, so the full browser workflow suite was not rerun.
 - 1.1.0 model smoke: a synthetic evidence question traversed Local WorkOS → DSH → GPT-6 Luna and returned one grounded citation. DSH tools, session-log, title and telemetry plugins were disabled; session persistence was redirected to a disposable temp directory. No personal materials were used.

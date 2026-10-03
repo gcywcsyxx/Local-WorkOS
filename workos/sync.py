@@ -66,6 +66,7 @@ class OneDriveMirror:
         self._status = {'enabled': self.root is not None, 'last_sync': None,
                         'error': None, 'root_name': 'AI Agent/Local WorkOS' if self.root else None,
                         'active_sqlite_in_onedrive': False, 'workspaces': {}}
+        self._original_sync_cache = {}
 
     def status(self):
         return {**self._status, 'workspaces': dict(self._status.get('workspaces', {}))}
@@ -86,12 +87,38 @@ class OneDriveMirror:
         if not isinstance(backup, dict) or backup.get('format') != 'local-workos' or backup.get('workspace') != workspace:
             raise ValueError('OneDrive 快照格式或工作区不匹配；本机数据未修改')
         store.restore(backup, workspace)
+        self._restore_originals(store, workspace)
         return True
+
+    def _restore_originals(self, store, workspace):
+        """Retry missing originals even after an earlier snapshot restore succeeded."""
+        from .attachments import read_original, save_original, original_path
+        missing = 0
+        for document in store.list('documents'):
+            if not document.get('attachment_ref') or document.get('kind') == 'memory':
+                continue
+            try:
+                local = original_path(store.path.parent, workspace, document['attachment_hash'])
+                if not local.is_file():
+                    raise KeyError('missing')
+                continue
+            except KeyError:
+                pass
+            try:
+                raw = read_original(self.root, workspace, document)
+            except KeyError:
+                missing += 1
+                continue
+            save_original(store.path.parent, workspace, raw, document.get('attachment_name') or 'original')
+        counts = self._status.setdefault('missing_originals_by_workspace', {})
+        counts[workspace] = missing
+        self._status['missing_originals'] = sum(counts.values())
 
     def sync(self, store, workspace):
         if self.root is None:
             return self.status()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._restore_originals(store, workspace)
         snapshot = store.backup(workspace)
         data = snapshot['data']
         digest = hashlib.sha256(_json_bytes(data)).hexdigest()
@@ -128,6 +155,19 @@ class OneDriveMirror:
                 slug = _safe_component(project.get('name'))
                 folder = self.root / 'Projects' / (project_id + '_' + slug)
                 changed_files += _write_if_changed(folder / 'project.json', _json_bytes(project))
+                organized = {}
+                for collection in ('documents', 'meetings', 'notes', 'deliverables', 'tasks'):
+                    for item in data.get(collection, []):
+                        if item.get('project_id') == project_id and item.get('kind') != 'memory':
+                            organized.setdefault(item.get('task_group') or '项目资料', []).append((collection, item))
+                index = ['# ' + str(project.get('name')) + ' · 项目材料', '']
+                for group, entries in sorted(organized.items()):
+                    index += ['## ' + group, '']
+                    for collection, item in entries:
+                        version = (' · ' + item['version_label']) if item.get('version_label') else ''
+                        index.append('- ' + str(item.get('title') or '') + version + ' (' + collection + ')')
+                    index.append('')
+                changed_files += _write_if_changed(folder / 'organization.md', '\n'.join(index).encode('utf-8'))
                 for collection, subdir in (('meetings', 'Meetings'), ('tasks', 'Actions'), ('notes', 'Research'), ('deliverables', 'Outputs')):
                     for item in data.get(collection, []):
                         if isinstance(item, dict) and item.get('project_id') == project_id and item.get('id'):
@@ -135,6 +175,7 @@ class OneDriveMirror:
                             payload = _json_bytes(item) if collection in ('meetings', 'tasks') else ('# ' + str(item.get('title') or name) + '\n\n' + str(item.get('body') or item.get('content') or '')).encode('utf-8')
                             suffix = '.json' if collection in ('meetings', 'tasks') else '.md'
                             changed_files += _write_if_changed(folder / subdir / (name + '__' + str(item['id']) + suffix), payload)
+            seen_originals = set()
             for document in data.get('documents', []):
                 if not isinstance(document, dict) or not document.get('id'):
                     continue
@@ -145,10 +186,33 @@ class OneDriveMirror:
                     folder = self.root / 'Inbox' / 'Sources'
                 doc_id = str(document['id'])
                 title = _safe_component(document.get('title'))
-                metadata = {key: document.get(key) for key in ('id', 'title', 'category', 'kind', 'source_ref', 'filename', 'hash', 'page_count', 'created_at', 'updated_at')}
+                metadata = {key: document.get(key) for key in ('id', 'title', 'category', 'kind', 'source_ref', 'filename', 'hash', 'page_count', 'created_at', 'updated_at', 'task_group', 'material_type', 'version_family', 'version_label', 'organization_reason', 'attachment_ref', 'attachment_hash', 'attachment_name')}
                 body = '# ' + str(document.get('title') or 'Imported source') + '\n\nSource: ' + str(document.get('source_ref') or document.get('filename') or '') + '\n\n' + str(document.get('content') or '')
                 changed_files += _write_if_changed(folder / (title + '__' + doc_id + '.meta.json'), _json_bytes(metadata))
                 changed_files += _write_if_changed(folder / (title + '__' + doc_id + '.md'), body.encode('utf-8'))
+                if document.get('attachment_ref') and document.get('kind') != 'memory':
+                    from .attachments import read_original, original_path
+                    digest = document['attachment_hash']
+                    if digest in seen_originals:
+                        continue
+                    seen_originals.add(digest)
+                    local = original_path(store.path.parent, workspace, digest)
+                    mirrored = original_path(self.root, workspace, digest)
+                    def signature(path):
+                        try:
+                            stat = path.stat()
+                            return stat.st_size, stat.st_mtime_ns
+                        except FileNotFoundError:
+                            return None
+                    signatures = signature(local), signature(mirrored)
+                    if signatures[0] is not None and signatures == self._original_sync_cache.get((workspace, digest)):
+                        continue
+                    try:
+                        raw = read_original(store.path.parent, workspace, document)
+                    except KeyError:
+                        continue
+                    changed_files += _write_if_changed(mirrored, raw)
+                    self._original_sync_cache[(workspace, digest)] = signature(local), signature(mirrored)
         manifest['active_sqlite_in_onedrive'] = False
         manifest['note'] = 'OneDrive stores project files and rebuildable JSON snapshots. Active SQLite/WAL remains local to avoid sync-lock corruption.'
         _write_if_changed(manifest_path, _json_bytes(manifest))

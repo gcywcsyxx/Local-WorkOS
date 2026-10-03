@@ -9,6 +9,11 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from .organization import (EMPTY_ORGANIZATION, ORGANIZATION_FIELDS,
+                           ORGANIZED_COLLECTIONS, BUILTIN_GROUPS, organize_record)
+from .model_records import (MODEL_FIELDS, WORKFLOW_FIELDS, canonical_model,
+                            validate_object, validate_source_ids, validate_coverage,
+                            validate_review_comments)
 
 COLLECTIONS = ('projects','tasks','documents','meetings','notes','deliverables','activity')
 FIELDS = {
@@ -20,6 +25,11 @@ FIELDS = {
  'deliverables': {'title','project_id','kind','body'},
  'activity': {'title','kind','project_id'},
 }
+for _collection_name in ORGANIZED_COLLECTIONS:
+ FIELDS[_collection_name] |= ORGANIZATION_FIELDS
+FIELDS['deliverables'] |= MODEL_FIELDS | WORKFLOW_FIELDS
+for _collection_name in ('documents','meetings','notes','deliverables'):
+ FIELDS[_collection_name].add('review_comments')
 ENUMS = {
  ('projects','stage'):('线索','初筛','尽调','投委会','投后','归档'),
  ('projects','priority'):('高','中','低'), ('tasks','priority'):('高','中','低'),
@@ -37,6 +47,11 @@ DEFAULTS = {
  'deliverables':dict(project_id='',kind='自定义',body=''),
  'activity':dict(project_id='',kind='change'),
 }
+for _collection_name in ORGANIZED_COLLECTIONS:
+ DEFAULTS[_collection_name].update(EMPTY_ORGANIZATION)
+DEFAULTS['deliverables'].update(method='',assumptions={},result={},workflow_key='',source_ids=[],coverage=[])
+for _collection_name in ('documents','meetings','notes','deliverables'):
+ DEFAULTS[_collection_name]['review_comments']=[]
 
 def now():
  return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -68,6 +83,10 @@ class Store:
      for obj in seed.get(col,[]):
       self.create(col,obj,log=False,internal=True)
     self.db.execute("INSERT INTO meta VALUES ('seeded','1')")
+  # Upgrade older SQLite files in place. Only derived metadata is changed;
+  # source payloads, IDs, timestamps and version 1 backup topology stay intact.
+  with self.lock,self.db:
+   self._organize_existing()
 
  def list(self,col):
   self._collection(col)
@@ -91,7 +110,15 @@ class Store:
   extra=set(obj)-allowed
   if extra: raise ValueError('存在不支持的字段：'+', '.join(sorted(extra)))
   for key,value in obj.items():
-   if key=='chunks':
+   if col=='deliverables' and key in ('assumptions','result'):
+    validate_object(value,'模型假设' if key=='assumptions' else '模型结果')
+   elif col=='deliverables' and key=='source_ids':
+    validate_source_ids(value)
+   elif col=='deliverables' and key=='coverage':
+    validate_coverage(value)
+   elif key=='review_comments':
+    validate_review_comments(value)
+   elif key=='chunks':
     if not isinstance(value,list) or len(value)>4000: raise ValueError('资料段落超过限制')
     for chunk in value:
      if not isinstance(chunk,dict) or not isinstance(chunk.get('text'),str): raise ValueError('段落格式不正确')
@@ -127,6 +154,12 @@ class Store:
   if len(obj.get(title_key,''))>200: raise ValueError('名称最多200字')
   for (table,key),options in ENUMS.items():
    if table==col and obj.get(key) not in options: raise ValueError('无效的'+key)
+  if col in ORGANIZED_COLLECTIONS:
+   if obj.get('task_group_source','automatic') not in ('automatic','manual'):raise ValueError('无效的子任务分类来源')
+   if len(obj.get('task_group',''))>100 or '\n' in obj.get('task_group','') or '\r' in obj.get('task_group',''):raise ValueError('子任务名称最多100字且不能换行')
+   if obj.get('task_group') and not obj.get('project_id'):raise ValueError('子任务必须关联项目')
+   if len(obj.get('version_label',''))>200 or len(obj.get('organization_reason',''))>500:raise ValueError('整理说明超过限制')
+   if obj.get('version_family') and not re.fullmatch(r'[a-f0-9]{24}',obj['version_family']):raise ValueError('版本族编号格式无效')
   for field in ('date','due'):
    if obj.get(field):
     try: datetime.strptime(obj[field],'%Y-%m-%d')
@@ -137,7 +170,71 @@ class Store:
     except KeyError: raise ValueError('关联记录不存在')
     if key in ('document_id','meeting_id') and obj.get('project_id') and linked.get('project_id') and obj['project_id']!=linked['project_id']:
      raise ValueError('关联资料或会议属于另一个项目')
+  if col=='deliverables':
+   if obj.get('workflow_key') and not re.fullmatch(r'[a-z][a-z0-9_-]{0,99}',obj['workflow_key']):raise ValueError('工作流类型格式无效')
+   source_ids=obj.get('source_ids',[])
+   if any(row['document_id'] not in source_ids for row in obj.get('coverage',[])):raise ValueError('资料覆盖记录必须来自来源编号列表')
+   if not internal:
+    for source_id in source_ids:
+     try:linked=self.get('documents',source_id)
+     except KeyError:raise ValueError('来源资料不存在')
+     if linked.get('kind')=='memory':raise ValueError('个人记忆不能作为交付物资料来源')
+     if obj.get('project_id') and linked.get('project_id') and obj['project_id']!=linked['project_id']:raise ValueError('来源资料属于另一个项目')
+   canonical=canonical_model(obj)
+   if canonical is not None:obj['result']=canonical
   ensure_json(obj)
+
+ def _organization(self,col,record,data=None,current=None,internal=False):
+  if col not in ORGANIZED_COLLECTIONS:return record
+  incoming=data or {}
+  if not internal:
+   if 'task_group' in incoming:
+    if not isinstance(incoming['task_group'],str):raise ValueError('task_group 必须为文本')
+    record['task_group']=incoming['task_group'].strip()
+    record['task_group_source']='manual' if record['task_group'] else 'automatic'
+   elif current and current.get('project_id')!=record.get('project_id'):
+    # Manual membership belongs to its original project.
+    record.update(task_group='',task_group_source='automatic')
+  project_id=record.get('project_id','')
+  project_tasks=[task for task in self.list('tasks') if task.get('project_id')==project_id]
+  linked=None
+  link=('documents',record.get('document_id')) if col=='notes' else ('meetings',record.get('meeting_id')) if col=='tasks' else None
+  if link and link[1]:
+   try:linked=self.get(*link)
+   except KeyError:pass
+  record.update(organize_record(col,record,project_tasks,linked))
+  if col=='deliverables' and record.get('method') and project_id:
+   record['material_type']='财务模型'
+   if record.get('task_group_source')!='manual' and record.get('task_group') in BUILTIN_GROUPS:
+    record.update(task_group='财务与估值',organization_reason='根据保存的结构化估值方法自动归类')
+  return record
+
+ def _organize_existing(self,project_id=None):
+  changed=0
+  # Parents precede their linked notes/tasks, so inheritance sees current groups.
+  for col in ('documents','meetings','deliverables','notes','tasks'):
+   for record in self.list(col):
+    if project_id is not None and record.get('project_id')!=project_id:continue
+    updated=self._organization(col,dict(record),internal=True)
+    if updated!=record:
+     self.db.execute('UPDATE records SET payload=? WHERE collection=? AND id=?',(ensure_json(updated),col,record['id']))
+     changed+=1
+  return changed
+
+ def organize_project(self,project_id):
+  """Reclassify existing material while retaining explicit subtask overrides."""
+  if not isinstance(project_id,str) or not project_id:raise ValueError('请先选择项目')
+  with self.lock,self.db:
+   self.get('projects',project_id)
+   changed=self._organize_existing(project_id)
+  return {'organized':changed,'project_id':project_id}
+
+ def _refresh_linked_organization(self,col,id):
+  target,field=('notes','document_id') if col=='documents' else ('tasks','meeting_id')
+  for linked in self.list(target):
+   if linked.get(field)==id:
+    updated=self._organization(target,dict(linked),internal=True)
+    if updated!=linked:self.db.execute('UPDATE records SET payload=? WHERE collection=? AND id=?',(ensure_json(updated),target,linked['id']))
 
  def create(self,col,data,log=True,internal=False):
   self._collection(col)
@@ -149,7 +246,10 @@ class Store:
   record['updated_at']=data.get('updated_at',now()) if internal else now()
   with self.lock,self.db:
    self._validate(col,record,internal)
+   self._organization(col,record,data,internal=internal)
+   self._validate(col,record,internal)
    self.db.execute('INSERT INTO records VALUES (?,?,?)',(col,record['id'],ensure_json(record)))
+   if col=='tasks' and record.get('project_id') and record.get('task_group_source')=='manual':self._organize_existing(record['project_id'])
    if log and col!='activity': self._log('创建 '+record.get('name',record.get('title','')),record.get('project_id',''))
   return record
 
@@ -162,9 +262,27 @@ class Store:
    if col=='meetings' and 'summary' in data and data['summary']!=current.get('summary') and not {'experts','matrix','contents'}&set(data):
     updated.update(experts=[],matrix={},contents=[])
    self._validate(col,updated)
+   self._organization(col,updated,data,current)
+   self._validate(col,updated)
+   self._validate_project_reassociation(col,id,updated)
    self.db.execute('UPDATE records SET payload=? WHERE collection=? AND id=?',(ensure_json(updated),col,id))
+   if col in ('documents','meetings'):self._refresh_linked_organization(col,id)
+   if col=='tasks' and (updated.get('task_group_source')=='manual' or current.get('task_group_source')=='manual'):
+    for project_id in {current.get('project_id'),updated.get('project_id')}:
+     if project_id:self._organize_existing(project_id)
    if col!='activity': self._log('更新 '+updated.get('name',updated.get('title','')),updated.get('project_id',''))
   return updated
+
+ def _validate_project_reassociation(self,col,id,updated):
+  if col not in ('documents','meetings'):return
+  child_col,field=('notes','document_id') if col=='documents' else ('tasks','meeting_id')
+  for child in self.list(child_col):
+   if child.get(field)==id and child.get('project_id') and updated.get('project_id') and child['project_id']!=updated['project_id']:
+    raise ValueError('关联资料或会议仍被原项目引用，请先调整关联')
+  if col=='documents':
+   for child in self.list('deliverables'):
+    if id in child.get('source_ids',[]) and child.get('project_id') and updated.get('project_id') and child['project_id']!=updated['project_id']:
+     raise ValueError('来源资料仍被原项目交付物引用，请先调整关联')
 
  def delete(self,col,id):
   with self.lock,self.db:
@@ -175,7 +293,10 @@ class Store:
      if table=='activity': continue
      if any(obj.get(key)==id for obj in self.list(table)):
       raise ValueError('该记录仍有关联内容，请先取消关联后删除')
+    if col=='documents' and any(id in obj.get('source_ids',[]) for obj in self.list('deliverables')):
+     raise ValueError('该资料仍被交付物引用，请先取消关联后删除')
    self.db.execute('DELETE FROM records WHERE collection=? AND id=?',(col,id))
+   if col=='tasks' and record.get('project_id') and record.get('task_group_source')=='manual':self._organize_existing(record['project_id'])
    if col!='activity': self._log('删除 '+record.get('name',record.get('title','')),'')
   return {'deleted':True}
 
@@ -212,6 +333,12 @@ class Store:
   for col,items in data.items():
    if col=='activity':continue
    for obj in items:
+    if col=='deliverables':
+     for source_id in obj.get('source_ids',[]):
+      source=lookup['documents'].get(source_id)
+      if not source:raise ValueError('备份含失效资料来源')
+      if source.get('kind')=='memory':raise ValueError('备份含个人记忆交付物来源')
+      if obj.get('project_id') and source.get('project_id') and obj['project_id']!=source['project_id']:raise ValueError('备份含跨项目资料来源')
     for key,table in [('project_id','projects'),('document_id','documents'),('meeting_id','meetings')]:
      if obj.get(key) and obj[key] not in ids[table]: raise ValueError('备份含失效关联')
      if key in ('document_id','meeting_id') and obj.get(key) and obj.get('project_id'):
@@ -225,6 +352,7 @@ class Store:
     self.db.execute('DELETE FROM records')
     for col,items in data.items():
      for obj in items: self.db.execute('INSERT INTO records VALUES (?,?,?)',(col,obj['id'],ensure_json(obj)))
+    self._organize_existing()
   return {'restored':True,'previous_backup':str(backup_path)}
 
  def close(self):

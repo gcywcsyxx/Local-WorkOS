@@ -42,7 +42,7 @@ class PasswordHttpTests(unittest.TestCase):
         challenge=headers["Set-Cookie"].split(";")[0]
         return self.request("/auth/login","POST",{"username":"workos-user","password":password,"remember":True},cookie=challenge,csrf=nonce)
     def test_anonymous_all_private_routes_are_protected(self):
-        for path in ("/api/bootstrap","/api/state","/api/backup","/api/sync/status","/api/memory/scan","/api/agent/tools","/api/documents/no-such","/api/export/no-such?format=docx"):
+        for path in ("/api/bootstrap","/api/state","/api/backup","/api/sync/status","/api/memory/scan","/api/agent/tools","/api/documents/no-such","/api/documents/no-such/original","/api/export/no-such?format=docx"):
             with self.subTest(path=path):self.assertEqual(self.request(path)[0],401)
         status,body,headers=self.request("/");self.assertEqual(status,303);self.assertEqual(headers["Location"],"/auth/login")
         self.assertEqual(self.request("/auth/ui.js")[0],200)

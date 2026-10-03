@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from datetime import date
+from datetime import date, timedelta
 
 METHODS = {
     'net_income': '净利润 × P/E（股权价值）',
@@ -243,14 +243,15 @@ def _simulate_lbo(a, forecasts, exit_multiple, ebitda_scale=1.0):
         cash_before_debt = ebitda - cash_tax - interest - f['capex'] - f['delta_nwc']
         mandatory_due = min(opening_debt, f['mandatory_amortization'])
         available = cash + cash_before_debt
-        mandatory_paid = min(mandatory_due, max(0.0, available))
+        mandatory_paid = min(mandatory_due, max(0.0, available - a['minimum_cash']))
         mandatory_shortfall = mandatory_due - mandatory_paid
         available -= mandatory_paid
         remaining_debt = max(0.0, opening_debt - mandatory_paid)
         sweep = 0.0
-        funding_gap = max(0.0, -available)
+        cash_floor_shortfall = max(0.0, a['minimum_cash'] - available)
+        funding_gap = cash_floor_shortfall
         if available > 0:
-            sweep = min(remaining_debt, available * f['cash_sweep_pct'])
+            sweep = min(remaining_debt, max(0.0, available - a['minimum_cash']) * f['cash_sweep_pct'])
             remaining_debt -= sweep
             cash_end = available - sweep
         else:
@@ -263,18 +264,48 @@ def _simulate_lbo(a, forecasts, exit_multiple, ebitda_scale=1.0):
                      'tax': cash_tax, 'capex': f['capex'], 'delta_nwc': f['delta_nwc'],
                      'cash_before_debt': cash_before_debt, 'mandatory_due': mandatory_due,
                      'mandatory_paid': mandatory_paid, 'cash_sweep': sweep,
+                     'mandatory_shortfall': mandatory_shortfall,
+                     'cash_floor_shortfall': cash_floor_shortfall,
                      'ending_debt': debt, 'ending_cash': cash, 'funding_gap': funding_gap})
     exit_ev = rows[-1]['ebitda'] * exit_multiple
     exit_equity_raw = exit_ev - debt + cash - a['exit_fees']
     proceeds = max(0.0, exit_equity_raw)
-    sponsor_equity = a['entry_ev'] + a['entry_fees'] + a['minimum_cash'] - a['entry_debt'] - a['seller_rollover']
-    moic = proceeds / sponsor_equity
+    sponsor_equity = a['entry_ev'] + a['entry_fees'] + a['initial_cash'] - a['entry_debt'] - a['seller_rollover']
+    total_entry_equity = sponsor_equity + a['seller_rollover']
+    sponsor_ownership = sponsor_equity / total_entry_equity
+    sponsor_proceeds = proceeds * sponsor_ownership
+    seller_proceeds = proceeds - sponsor_proceeds
+    moic = sponsor_proceeds / sponsor_equity
     days = (date.fromisoformat(a['exit_date']) - date.fromisoformat(a['entry_date'])).days
-    irr = -1.0 if proceeds == 0 else moic ** (365.0 / days) - 1.0
+    irr = -1.0 if sponsor_proceeds == 0 else moic ** (365.0 / days) - 1.0
     return {'rows': rows, 'exit_ev': exit_ev, 'exit_equity_raw': exit_equity_raw,
-            'sponsor_proceeds': proceeds, 'entry_sponsor_equity': sponsor_equity,
+            'total_exit_proceeds': proceeds, 'seller_proceeds': seller_proceeds,
+            'sponsor_proceeds': sponsor_proceeds, 'entry_sponsor_equity': sponsor_equity,
+            'total_entry_equity': total_entry_equity, 'sponsor_ownership': sponsor_ownership,
+            'seller_ownership': 1.0 - sponsor_ownership,
             'exit_debt': debt, 'exit_cash': cash, 'moic': moic, 'irr': irr,
             'funding_gap_total': funding_gap_total}
+
+
+def _lbo_horizon(entry_date, exit_date, forecasts):
+    """Annual cash flows require a complete year for each explicitly named row."""
+    count = len(forecasts)
+    try:
+        anniversary = entry_date.replace(year=entry_date.year + count)
+    except ValueError:
+        anniversary = date(entry_date.year + count, 2, 28)
+    if exit_date not in (anniversary, anniversary - timedelta(days=1)):
+        raise ValueError('LBO预测年度数量与进入/退出日期不一致；每行须覆盖一个完整年度，暂不支持未明确计算的不足一年期间')
+    labels = [str(row['year']).strip() for row in forecasts]
+    calendar = [re.fullmatch(r'(?:FY)?(20\d{2})(?:[EAF])?', label, re.I) for label in labels]
+    if all(calendar):
+        first_year = entry_date.year if (entry_date.month, entry_date.day) == (1, 1) else entry_date.year + 1
+        if [int(match.group(1)) for match in calendar] != list(range(first_year, first_year + count)):
+            raise ValueError('LBO预测年份须连续并覆盖持有期间；非年初进入时年度标签指完整年度结束年份')
+    else:
+        generic = [re.fullmatch(r'(?:Y|Year\s*|第)?(\d+)(?:年)?', label, re.I) for label in labels]
+        if not all(generic) or [int(match.group(1)) for match in generic] != list(range(1, count + 1)):
+            raise ValueError('LBO期间请使用连续的YYYY/FY2027E或Year1、Year2标签，不能混用或漏年')
 
 
 def _calc_lbo(a):
@@ -295,11 +326,14 @@ def _calc_lbo(a):
     exit_fees = _num(a, 'exit_fees', minimum=0)
     base_exit_multiple = _num(a, 'exit_multiple', minimum=0, maximum=100)
     forecasts = _forecasts(a, methods={'ebitda'})
+    _lbo_horizon(entry_date, exit_date, forecasts)
+    if initial_cash < minimum_cash:
+        raise ValueError('初始现金不能低于最低现金；请明确资金来源和最低现金要求')
     if any(row['interest_rate'] is None for row in forecasts):
         raise ValueError('请明确每年利率，或提供全期统一 interest_rate')
-    sponsor_equity = entry_ev + entry_fees + minimum_cash - entry_debt - seller_rollover
+    sponsor_equity = entry_ev + entry_fees + initial_cash - entry_debt - seller_rollover
     if sponsor_equity <= 0:
-        raise ValueError('进入股权投入必须为正；请核对EV、债务、费用、最低现金和rollover')
+        raise ValueError('进入股权投入必须为正；请核对EV、债务、费用、初始现金和rollover')
     base = _simulate_lbo({**a, 'entry_ev': entry_ev, 'entry_debt': entry_debt,
                           'entry_fees': entry_fees, 'minimum_cash': minimum_cash,
                           'initial_cash': initial_cash, 'seller_rollover': seller_rollover,
@@ -311,7 +345,10 @@ def _calc_lbo(a):
                                    'initial_cash': initial_cash, 'seller_rollover': seller_rollover,
                                    'exit_fees': exit_fees}, forecasts, mult, 1 + shock)['irr']
                     for mult in multiples] for shock in shocks]
-    warnings = ['仅计算单次进入投入与单次退出，不含期间分红、分层债务、循环利息或ESOP/IPO稀释。敏感性按EBITDA/D&A同比缩放，CapEx与营运资本保持基准。']
+    warnings = ['仅计算单次进入投入与单次退出，不含期间分红、分层债务、循环利息或ESOP/IPO稀释。敏感性按EBITDA/D&A同比缩放，CapEx与营运资本保持基准。',
+                '进入EV按现金自由/债务自由口径；initial_cash为交易出资支持的期初现金，entry_debt为交易完成后的融资余额，不单列既有债务清偿或再融资桥。',
+                'Sponsor与卖方滚存按期初股权出资比例分享全部退出股权，假设同权普通股；出资基础包括费用与期初现金，不含优先权或分配瀑布。',
+                '每个预测行对应完整年度；非年初进入的年度标签指该完整年度结束年份，IRR按实际进入/退出日期计算。']
     if base['funding_gap_total'] > 0:
         warnings.append('预测期间存在未融资现金缺口；结果不是可执行的融资方案。')
     if base['exit_equity_raw'] < 0:
@@ -320,36 +357,45 @@ def _calc_lbo(a):
             **base, 'entry_date': entry_date.isoformat(), 'exit_date': exit_date.isoformat(),
             'holding_days': holding_days, 'entry_ev': entry_ev, 'entry_debt': entry_debt,
             'entry_fees': entry_fees, 'minimum_cash': minimum_cash,
+            'initial_cash': initial_cash,
             'seller_rollover': seller_rollover, 'exit_multiple': base_exit_multiple,
             'exit_fees': exit_fees, 'sensitivity': {'rows': shocks, 'columns': multiples, 'values': sensitivity},
-            'formula': 'EBITDA−税−利息−capex−ΔNWC先覆盖强制偿债，再按cash sweep比例偿还剩余债务；期末现金计入退出股权桥。',
+            'formula': 'Sponsor出资=进入EV+费用+期初现金−融资债务−卖方滚存；保留最低现金后覆盖强制偿债，再按cash sweep偿还债务；总退出股权=退出EV−债务+现金−费用；Sponsor回收=总退出股权×Sponsor出资/(Sponsor出资+卖方滚存)。',
             'warning': ' '.join(warnings)}
 
 
 def calculate_valuation(method, assumptions):
     """Run a deterministic valuation method; all arithmetic stays in code."""
     a = _obj(assumptions, '模型假设')
-    if method not in ASSUMPTION_SCHEMAS: raise ValueError('不支持的估值方法')
+    if not isinstance(method,str) or method not in ASSUMPTION_SCHEMAS: raise ValueError('不支持的估值方法')
     missing = missing_assumptions(method, a)
     if missing: raise ValueError('尚缺少明确假设：' + '、'.join(missing))
     allowed = set(ASSUMPTION_SCHEMAS[method]['required']) | set(ASSUMPTION_SCHEMAS[method]['optional']) | {'as_of_date','source_notes','assumption_sources','scenario','notes'}
     unknown = sorted(set(a) - allowed)
     if unknown: raise ValueError('以下假设字段未映射，未用于计算：' + '、'.join(unknown))
     if method == 'net_income':
-        return _calc_net_income(a)
+        return _finite_result(_calc_net_income(a))
     if method == 'ps':
-        return _calc_ps(a)
+        return _finite_result(_calc_ps(a))
     if method == 'dcf':
         allowed_rows = {'year','ebit','revenue','ebit_margin','da','capex','delta_nwc','tax_rate'}
         unknown_rows = sorted({key for row in a['forecasts'] for key in row} - allowed_rows)
         if unknown_rows: raise ValueError('DCF预测含未映射字段：' + '、'.join(unknown_rows))
-        return _calc_dcf(a)
+        return _finite_result(_calc_dcf(a))
     if method == 'lbo':
         allowed_rows = {'year','ebitda','da','capex','delta_nwc','tax_rate','interest_rate','mandatory_amortization','cash_sweep_pct'}
         unknown_rows = sorted({key for row in a['forecasts'] for key in row} - allowed_rows)
         if unknown_rows: raise ValueError('LBO预测含未映射字段：' + '、'.join(unknown_rows))
-        return _calc_lbo(a)
+        return _finite_result(_calc_lbo(a))
     raise ValueError('不支持的估值方法')
+
+
+def _finite_result(result):
+    try:
+        json.dumps(result,allow_nan=False)
+    except (ValueError,OverflowError) as exc:
+        raise ValueError('模型计算超出有限数值范围；请核对金额单位与假设尺度') from exc
+    return result
 
 
 ASSUMPTION_SCHEMAS = {
@@ -374,7 +420,7 @@ def parse_assumption_json(text):
     return value
 
 def missing_assumptions(method, assumptions):
-    if method not in ASSUMPTION_SCHEMAS or not isinstance(assumptions, dict):
+    if not isinstance(method,str) or method not in ASSUMPTION_SCHEMAS or not isinstance(assumptions, dict):
         raise ValueError('估值方法或假设结构不正确')
     schema = ASSUMPTION_SCHEMAS[method]
     missing = [key for key in schema['required'] if assumptions.get(key) is None or assumptions.get(key) == '']

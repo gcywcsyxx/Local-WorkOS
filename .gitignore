@@ -37,3 +37,4 @@ secrets*
 *.msg
 .DS_Store
 Thumbs.db
+workos-release.json

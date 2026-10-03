@@ -123,6 +123,44 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/api/backup')[1]['data'], before)
         self.assertEqual(self.request('GET', '/api/state', workspace='invalid')[0], 400)
 
+    def test_original_upload_download_versions_and_text_edit(self):
+        project = self.create('projects', {'name': '合成版本项目'})
+        originals = []
+        for version in (1, 2):
+            raw = ('Synthetic IC memo version ' + str(version)).encode()
+            status, doc = self.request('POST', '/api/upload', {'name': 'Memo_v' + str(version) + '.txt',
+                'base64': base64.b64encode(raw).decode(), 'project_id': project['id'],
+                'source_ref': 'Materials/Memo_v' + str(version) + '.txt'})
+            self.assertEqual(status, 201, doc)
+            self.assertEqual(self.request('GET', '/api/documents/' + doc['id'] + '/original'), (200, raw))
+            self.assertEqual(self.request('GET', '/api/documents/' + doc['id'] + '/original', workspace='demo')[0], 404)
+            originals.append((doc, raw))
+        self.assertNotEqual(originals[0][0]['id'], originals[1][0]['id'])
+        self.assertEqual(originals[0][0]['version_family'], originals[1][0]['version_family'])
+        doc, raw = originals[0]
+        self.assertEqual(self.request('PATCH', '/api/documents/' + doc['id'], {'content': 'Edited extracted text'})[0], 200)
+        self.assertEqual(self.request('GET', '/api/documents/' + doc['id'] + '/original'), (200, raw))
+        for method, route in [('POST', '/api/documents'), ('PATCH', '/api/documents/' + doc['id'])]:
+            status, _ = self.request(method, route, {'title': 'Cannot replace originals', 'attachment_ref': doc['attachment_ref']})
+            self.assertEqual(status, 400)
+        self.assertEqual(self.request('POST', '/api/projects/' + project['id'] + '/organize', {})[0], 200)
+        self.assertEqual(self.request('POST', '/api/projects/' + project['id'] + '/organize', {}, csrf=False)[0], 403)
+
+    def test_original_upload_rejects_absolute_or_traversal_source(self):
+        for source in ('../private.txt', '/private.txt', 'C:/private.txt', 'folder/../../private.txt'):
+            status, _ = self.request('POST', '/api/upload', {'name': 'file.txt', 'source_ref': source,
+                'base64': base64.b64encode(b'Synthetic text').decode()})
+            self.assertEqual(status, 400, source)
+        self.assertFalse(self.app.stores['personal'].list('documents'))
+        self.assertFalse((self.app.data_dir / 'originals').exists())
+
+    def test_missing_original_has_specific_error(self):
+        doc = self.create('documents', {'title': 'Synthetic legacy source', 'content': 'Kept text'})
+        status, result = self.request('GET', '/api/documents/' + doc['id'] + '/original')
+        self.assertEqual(status, 404)
+        self.assertEqual(result['code'], 'original_unavailable')
+        self.assertIn('原文件', result['error'])
+
     def test_txt_upload_local_ask_citations_and_selection(self):
         text = '合成星河公司收入为100百万元。收入增长来自合成客户订单。'
         encoded = base64.b64encode(text.encode('utf-8')).decode('ascii')
@@ -378,7 +416,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(model['DCF_Forecast']['I2'].value,'=E2+F2-G2-H2')
         self.assertEqual(model['DCF_Forecast']['L2'].value,'=I2*K2')
         self.assertIn('DCF_Forecast',model.sheetnames)
-        lbo={'currency':'RMB','unit':'百万元','entry_date':'2026-01-01','exit_date':'2030-01-01','entry_ev':1000,'entry_debt':500,'entry_fees':10,'minimum_cash':10,'initial_cash':10,'seller_rollover':0,'exit_fees':10,'exit_multiple':10,'forecasts':[{'year':'2026','ebitda':100,'da':10,'capex':20,'delta_nwc':5,'tax_rate':0.25,'interest_rate':0.06,'mandatory_amortization':20,'cash_sweep_pct':0.5}]}
+        lbo={'currency':'RMB','unit':'百万元','entry_date':'2026-01-01','exit_date':'2027-01-01','entry_ev':1000,'entry_debt':500,'entry_fees':10,'minimum_cash':10,'initial_cash':10,'seller_rollover':0,'exit_fees':10,'exit_multiple':10,'forecasts':[{'year':'2026','ebitda':100,'da':10,'capex':20,'delta_nwc':5,'tax_rate':0.25,'interest_rate':0.06,'mandatory_amortization':20,'cash_sweep_pct':0.5}]}
         status,raw=self.request('POST','/api/model/export-xlsx',{'method':'lbo','assumptions':lbo})
         self.assertEqual(status,200)
         model=load_workbook(io.BytesIO(raw),data_only=False);ws=model['LBO_Model']

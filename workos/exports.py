@@ -162,36 +162,44 @@ def valuation_xlsx(method, assumptions, result):
         for col, width in enumerate((16,16,14,16,16,14,14,14,16,18,18,18),1): ws.column_dimensions[get_column_letter(col)].width=width
     elif method == "lbo":
         forecasts = assumptions.get("forecasts") or []; ws = wb.create_sheet("LBO_Model")
-        ws.append(["Period","EBITDA","D&A","CapEx","ΔNWC","Tax Rate","Interest Rate","Mandatory Amort.","Cash Sweep %","Opening Debt","Opening Cash","Interest","Tax","Cash Before Debt","Mandatory Due","Mandatory Paid","Sweep","Ending Debt","Ending Cash","Funding Gap"])
+        ws.append(["Period","EBITDA","D&A","CapEx","ΔNWC","Tax Rate","Interest Rate","Mandatory Amort.","Cash Sweep %","Opening Debt","Opening Cash","Interest","Tax","Cash Before Debt","Mandatory Due","Mandatory Paid","Sweep","Ending Debt","Ending Cash","Funding Gap","Mandatory Shortfall","Cash Floor Shortfall"])
         for idx, row in enumerate(forecasts,2):
             vals = [row.get("year"),row.get("ebitda"),row.get("da"),row.get("capex"),row.get("delta_nwc")]+[row[key] if row.get(key) is not None else "="+ref(key) for key in ("tax_rate","interest_rate","mandatory_amortization","cash_sweep_pct")]
-            f = ["="+ref("entry_debt") if idx==2 else "=R%d"%(idx-1), "="+ref("initial_cash") if idx==2 else "=S%d"%(idx-1), "=J%d*G%d"%(idx,idx), "=MAX(0,B%d-C%d-L%d)*F%d"%(idx,idx,idx,idx), "=B%d-M%d-L%d-D%d-E%d"%(idx,idx,idx,idx,idx), "=MIN(J%d,H%d)"%(idx,idx), "=MIN(O%d,MAX(0,K%d+N%d))"%(idx,idx,idx), "=IF(K%d+N%d-P%d>0,MIN(MAX(0,J%d-P%d),(K%d+N%d-P%d)*I%d),0)"%(idx,idx,idx,idx,idx,idx,idx,idx,idx), "=MAX(0,J%d-P%d-Q%d)"%(idx,idx,idx), "=MAX(0,K%d+N%d-P%d-Q%d)"%(idx,idx,idx,idx), "=MAX(0,-(K%d+N%d-P%d))+O%d-P%d"%(idx,idx,idx,idx,idx)]
+            f = ["="+ref("entry_debt") if idx==2 else "=R%d"%(idx-1), "="+ref("initial_cash") if idx==2 else "=S%d"%(idx-1), "=J%d*G%d"%(idx,idx), "=MAX(0,B%d-C%d-L%d)*F%d"%(idx,idx,idx,idx), "=B%d-M%d-L%d-D%d-E%d"%(idx,idx,idx,idx,idx), "=MIN(J%d,H%d)"%(idx,idx), "=MIN(O%d,MAX(0,K%d+N%d-%s))"%(idx,idx,idx,ref("minimum_cash")), "=MIN(MAX(0,J%d-P%d),MAX(0,K%d+N%d-P%d-%s)*I%d)"%(idx,idx,idx,idx,idx,ref("minimum_cash"),idx), "=MAX(0,J%d-P%d-Q%d)"%(idx,idx,idx), "=MAX(0,K%d+N%d-P%d-Q%d)"%(idx,idx,idx,idx), "=U%d+V%d"%(idx,idx), "=O%d-P%d"%(idx,idx), "=MAX(0,%s-(K%d+N%d-P%d))"%(ref("minimum_cash"),idx,idx,idx)]
             ws.append(vals+f)
         ws.freeze_panes="A2"
         if forecasts:
             n = len(forecasts)+1
             for col,label in enumerate(("Opening Debt","Opening Cash","Interest","Tax","Cash Before Debt","Mandatory Due","Mandatory Paid","Sweep","Ending Debt","Ending Cash","Funding Gap"),10): ws.cell(1,col,label)
             er=n+2; ws.cell(er,1,"Formula Exit EV"); ws.cell(er,2,"=B%d*%s"%(n,ref("exit_multiple")))
-            pr=n+3; ws.cell(pr,1,"Formula Sponsor Proceeds"); ws.cell(pr,2,"=MAX(0,B%d-R%d+S%d-%s)"%(er,n,n,ref("exit_fees")))
-            sr=n+4; ws.cell(sr,1,"Formula Sponsor Equity"); ws.cell(sr,2,"="+ref("entry_ev")+"+"+ref("entry_fees")+"+"+ref("minimum_cash")+"-"+ref("entry_debt")+"-"+ref("seller_rollover"))
+            tr=n+12; tor=n+13; owr=n+14; sellerpr=n+15; sellerown=n+16
+            pr=n+3; ws.cell(pr,1,"Formula Sponsor Proceeds"); ws.cell(pr,2,"=B%d*B%d"%(tr,owr))
+            sr=n+4; ws.cell(sr,1,"Formula Sponsor Equity"); ws.cell(sr,2,"="+ref("entry_ev")+"+"+ref("entry_fees")+"+"+ref("initial_cash")+"-"+ref("entry_debt")+"-"+ref("seller_rollover"))
             mr=n+5; ws.cell(mr,1,"Formula MOIC"); ws.cell(mr,2,"=B%d/B%d"%(pr,sr))
             from datetime import date as _date
             ws.cell(n+6,1,"Entry Date"); ws.cell(n+6,2,"="+ref("entry_date"));ws.cell(n+6,2).number_format="yyyy-mm-dd"
             ws.cell(n+7,1,"Exit Date"); ws.cell(n+7,2,"="+ref("exit_date"));ws.cell(n+7,2).number_format="yyyy-mm-dd"
             ws.cell(n+8,1,"Formula IRR"); ws.cell(n+8,2,"=B%d^(365/(B%d-B%d))-1"%(mr,n+7,n+6))
             ws.cell(n+10,1,"Python Ground Truth — Sponsor Proceeds"); ws.cell(n+10,2,result.get("sponsor_proceeds")); ws.cell(n+11,1,"Python Ground Truth — IRR"); ws.cell(n+11,2,result.get("irr"))
-        for col in range(1,21): ws.column_dimensions[get_column_letter(col)].width=16
+            ws.cell(tr,1,"Formula Total Exit Proceeds"); ws.cell(tr,2,"=MAX(0,B%d-R%d+S%d-%s)"%(er,n,n,ref("exit_fees")))
+            ws.cell(tor,1,"Formula Total Entry Equity"); ws.cell(tor,2,"=B%d+%s"%(sr,ref("seller_rollover")))
+            ws.cell(owr,1,"Formula Sponsor Ownership"); ws.cell(owr,2,"=B%d/B%d"%(sr,tor));ws.cell(owr,2).number_format="0.0%"
+            ws.cell(sellerpr,1,"Formula Seller Proceeds");ws.cell(sellerpr,2,"=B%d-B%d"%(tr,pr))
+            ws.cell(sellerown,1,"Formula Seller Ownership");ws.cell(sellerown,2,"=1-B%d"%owr);ws.cell(sellerown,2).number_format="0.0%"
+            ws.cell(n+18,1,"Ownership / financing assumptions");ws.cell(n+18,2,result.get("warning", ""))
+        for col in range(1,23): ws.column_dimensions[get_column_letter(col)].width=16
     rows = result.get("forecast") or result.get("rows")
     if isinstance(rows, list):
         output=wb.create_sheet("Calculated_Output"); keys=sorted({k for row in rows if isinstance(row,dict) for k in row}); output.append(keys)
         for row in rows:
             if isinstance(row,dict): output.append([row.get(k) for k in keys])
     if method=="lbo" and forecasts:
-        for label,rownum in (("Sponsor Proceeds",pr),("Sponsor Equity",sr),("MOIC",mr),("IRR",n+8)):
+        for label,rownum in (("Sponsor Proceeds",pr),("Sponsor Equity",sr),("MOIC",mr),("IRR",n+8),
+                             ("Total Exit Proceeds",tr),("Seller Proceeds",sellerpr),("Sponsor Ownership",owr),("Seller Ownership",sellerown)):
             summary.append([label,"=LBO_Model!B"+str(rownum)])
     if method=="ps" and "net_debt" in assumptions:summary.append(["Enterprise Value","=B7+"+ref("net_debt")])
     summary.cell(6,3,"Python Snapshot — original inputs")
-    mapping={"Equity Value":"equity_value","Enterprise Value":"enterprise_value" if method=="dcf" else "implied_enterprise_value","Implied Value / Share":"implied_value_per_share","Sponsor Proceeds":"sponsor_proceeds","Sponsor Equity":"entry_sponsor_equity","MOIC":"moic","IRR":"irr"}
+    mapping={"Equity Value":"equity_value","Enterprise Value":"enterprise_value" if method=="dcf" else "implied_enterprise_value","Implied Value / Share":"implied_value_per_share","Sponsor Proceeds":"sponsor_proceeds","Sponsor Equity":"entry_sponsor_equity","MOIC":"moic","IRR":"irr","Total Exit Proceeds":"total_exit_proceeds","Seller Proceeds":"seller_proceeds","Sponsor Ownership":"sponsor_ownership","Seller Ownership":"seller_ownership"}
     for rownum in range(7,summary.max_row+1):
         key=mapping.get(summary.cell(rownum,1).value)
         if key in result:summary.cell(rownum,3,result[key])

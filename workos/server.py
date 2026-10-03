@@ -105,6 +105,17 @@ class Application:
   self.dsh_entry=(Path(dsh_cli).resolve().parent/'node_modules'/'@deepseek-ai'/'dsh'/'lib'/'bin.js') if dsh_cli else None
   self.dsh_available=bool(self.dsh_node and self.dsh_entry and self.dsh_entry.is_file())
   self.dsh_lock=threading.Lock()
+  from .workflow_runs import WorkflowRuns
+  self.workflow_runs=WorkflowRuns()
+
+ def run_workflow(self,workspace,body):
+  from .workflows import run_workflow
+  if workspace not in self.stores:raise ValueError('工作区选择不正确')
+  def execute():
+   result=run_workflow(self,self.stores[workspace],body)
+   self.sync_workspace(workspace)
+   return result
+  return self.workflow_runs.run(workspace,body,execute)
 
  def dsh_public(self):
   return {'available':self.dsh_available,'provider':'ChatGPT via DSH','model':'gpt-6-luna','models':[{'id':key,'name':value[0]} for key,value in DSH_MODELS.items()]}
@@ -235,7 +246,8 @@ class Application:
  def dsh_answer(self,prompt,model):
   if model not in DSH_MODELS:raise ValueError('所选 DSH 模型不在允许列表中')
   if not self.dsh_available:raise ValueError('没有找到可用的 DSH 本机运行环境；请检查 DSH 是否已安装')
-  with self.dsh_lock, tempfile.TemporaryDirectory(prefix='local-workos-dsh-') as folder:
+  from .workflow_runs import exclusive_model_run
+  with exclusive_model_run(self.dsh_lock), tempfile.TemporaryDirectory(prefix='local-workos-dsh-') as folder:
    root=Path(folder);overlay=root/'profile.yml';output=root/'answer.txt';session_root=root/'sessions'
    session_root.mkdir()
    overlay.write_text(self._dsh_overlay(model,session_root),encoding='utf-8')
@@ -459,6 +471,7 @@ class Handler(BaseHTTPRequestHandler):
   self.end_headers();self.wfile.write(raw)
  def handle_error(self,exc):
   from .password_auth import LoginRequired,TooManyLogins,LoginChallengeExpired
+  from .attachments import OriginalUnavailable
   if isinstance(exc,LoginRequired):
    if self.command=='GET' and not urllib.parse.urlsplit(self.path).path.startswith('/api/'):
     self.response_headers={'Location':'/auth/login'};return self.respond('',303,'text/plain; charset=utf-8')
@@ -468,6 +481,7 @@ class Handler(BaseHTTPRequestHandler):
   if isinstance(exc,TooManyLogins):
    self.response_headers={'Retry-After':'600'};return self.respond({'error':str(exc)},429)
   if isinstance(exc,PermissionError):self.respond({'error':str(exc)},403)
+  elif isinstance(exc,OriginalUnavailable):self.respond({'error':exc.args[0],'code':'original_unavailable'},404)
   elif isinstance(exc,KeyError):self.respond({'error':'记录不存在'},404)
   elif isinstance(exc,ValueError):self.respond({'error':str(exc)},400)
   else:
@@ -487,9 +501,18 @@ class Handler(BaseHTTPRequestHandler):
    if path=='/api/agent/tools':
     from .agent import AGENT_TOOLS
     return self.respond({'tools':AGENT_TOOLS})
+   if path=='/api/workflows':
+    from .workflows import workflow_catalog
+    return self.respond({'workflows':workflow_catalog()})
    if path=='/api/sync/status':return self.respond(self.app.sync_status)
    if path=='/api/state':return self.respond(store.state())
-   if path=='/api/health':return self.respond({'app':'local-workos','version':__version__,'status':'ok'})
+   if path=='/api/health':
+    revision=''
+    try:
+     build=json.loads((ROOT/'workos-release.json').read_text(encoding='utf-8-sig'))
+     if build.get('version')==__version__ and re.fullmatch(r'[a-f0-9]{40}',str(build.get('source_revision',''))):revision=build['source_revision']
+    except (OSError,ValueError,AttributeError):pass
+    return self.respond({'app':'local-workos','version':__version__,'status':'ok','source_revision':revision})
    if path=='/api/public/status':
     if self.remote_request:raise PermissionError('公网配置状态只允许本机读取')
     return self.respond({'origin':self.app.public_origin,'auth_mode':self.app.public_auth_mode,'password_configured':self.app.password_auth.configured})
@@ -511,6 +534,12 @@ class Handler(BaseHTTPRequestHandler):
       pos=text.lower().find(q)
       if pos>=0:results.append({'type':col,'id':record['id'],'title':title,'excerpt':text[max(0,pos-45):pos+160],'project_id':record.get('project_id','')})
     return self.respond({'results':results[:100]})
+   match=re.fullmatch(r'/api/documents/([^/]+)/original',path)
+   if match:
+    from .attachments import read_original
+    record=store.get('documents',match[1])
+    raw=read_original(self.app.data_dir,mode,record)
+    return self.respond(raw,mime='application/octet-stream',filename=record.get('attachment_name') or 'original')
    match=re.fullmatch(r'/api/documents/([^/]+)',path)
    if match:return self.respond(store.get('documents',match[1]))
    match=re.fullmatch(r'/api/meetings/([^/]+)',path)
@@ -568,6 +597,7 @@ class Handler(BaseHTTPRequestHandler):
      try:raw=base64.b64decode(encoded,validate=True)
      except ValueError:raise ValueError('文件编码不正确')
      if len(raw)>20_000_000:raise ValueError('单份文件最多20MB')
+     name=name.replace('\\','/').rsplit('/',1)[-1]
      parsed=parse_upload(name,raw)
      if kind=='memory':
       if mode!='personal':raise ValueError('真实记忆只允许导入个人工作区')
@@ -575,11 +605,28 @@ class Handler(BaseHTTPRequestHandler):
       source_ref=body.get('source_ref') or Path(name).name
       record=import_uploaded_memory(store,parsed,Path(name).name,source_ref)
      else:
-      record=store.create('documents',{'title':Path(name).stem[:200] or '导入资料','project_id':body.get('project_id',''),'kind':'research','content':parsed['content'],'filename':Path(name).name,'private':mode=='personal','page_count':parsed['page_count'],'source_ref':Path(name).name,'hash':hashlib.sha256(raw).hexdigest(),'chunks':chunk_text(parsed['content'],parsed.get('pages'))})
+      from .attachments import save_original
+      source_ref=body.get('source_ref') or name
+      if not isinstance(source_ref,str) or len(source_ref)>1000 or source_ref.startswith(('/','\\')) or re.match(r'^[A-Za-z]:',source_ref) or '..' in source_ref.replace('\\','/').split('/'):
+       raise ValueError('来源只允许相对文件名或文件夹路径')
+      # Validate the project before retaining bytes. Each upload remains a separate version record.
+      if body.get('project_id'):store.get('projects',body['project_id'])
+      attachment=save_original(self.app.data_dir,mode,raw,name)
+      payload={'title':Path(name).stem[:200] or '导入资料','project_id':body.get('project_id',''),'kind':'research','content':parsed['content'],'filename':name,'private':mode=='personal','page_count':parsed['page_count'],'source_ref':source_ref,'hash':hashlib.sha256(raw).hexdigest(),'chunks':chunk_text(parsed['content'],parsed.get('pages')),**attachment}
+      if 'task_group' in body:payload['task_group']=body['task_group']
+      record=store.create('documents',payload)
      record['warnings']=parsed.get('warnings',[])
      self.app.sync_workspace(mode)
      return self.respond(record,201)
     if path=='/api/ask':return self.respond(self.app.ask(store,body))
+    if path=='/api/workflows/plan':
+     from .workflows import plan_workflow
+     return self.respond(plan_workflow(body.get('message','')))
+    if path=='/api/workflows/run':
+     from .workflow_runs import WorkflowBusy
+     try:result=self.app.run_workflow(mode,body)
+     except WorkflowBusy as exc:return self.respond({'error':str(exc),'code':'workflow_busy'},409)
+     return self.respond(result,201)
     if path=='/api/meeting-transcript-extract':
      from .engine import parse_upload
      name=body.get('name','transcript.txt');encoded=body.get('base64','')
@@ -600,6 +647,9 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/model/valuation':
      from .valuation import calculate_valuation
      return self.respond(calculate_valuation(body.get('method'),body.get('assumptions')))
+    if path=='/api/model/scenarios':
+     from .model_records import compare_scenarios
+     return self.respond(compare_scenarios(body.get('method'),body.get('assumptions'),body.get('scenarios')))
     if path=='/api/model/export-xlsx':
      from .exports import valuation_xlsx
      from .valuation import calculate_valuation
@@ -630,6 +680,10 @@ class Handler(BaseHTTPRequestHandler):
      if body.get('confirm') is not True:raise ValueError('请确认恢复备份')
      result=store.restore(body.get('backup'),mode);self.app.sync_workspace(mode)
      return self.respond(result)
+    match=re.fullmatch(r'/api/projects/([^/]+)/organize',path)
+    if match:
+     result=store.organize_project(match[1]);self.app.sync_workspace(mode)
+     return self.respond(result)
     if path=='/api/sync':return self.respond(self.app.sync_workspace(mode))
     if path=='/api/shutdown':
      self.respond({'stopping':True});threading.Thread(target=self.server.shutdown,daemon=True).start();return
@@ -637,6 +691,7 @@ class Handler(BaseHTTPRequestHandler):
     if match:
      col=match[1]
      if col=='documents':
+      if set(body)&{'attachment_ref','attachment_hash','attachment_name'}:raise ValueError('原文件信息只允许通过文件导入创建')
       from .engine import chunk_text
       body['chunks']=chunk_text(body.get('content',''))
       body['hash']=hashlib.sha256(body.get('content','').encode()).hexdigest()
@@ -649,6 +704,7 @@ class Handler(BaseHTTPRequestHandler):
      result=store.delete(col,id);self.app.sync_workspace(mode)
      return self.respond(result)
     if method=='PATCH':
+     if col=='documents' and set(body)&{'attachment_ref','attachment_hash','attachment_name'}:raise ValueError('不能修改已保存的原文件')
      if col=='documents' and 'content' in body:
       from .engine import chunk_text
       if not isinstance(body['content'],str):raise ValueError('资料必须为文本')
