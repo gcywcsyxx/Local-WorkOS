@@ -29,6 +29,10 @@ from .sync import OneDriveMirror
 
 ROOT=Path(__file__).resolve().parents[1]
 MAX_BODY=28_000_000
+
+class CsrfExpired(PermissionError):
+ """Only a validated request's CSRF mismatch is eligible for token recovery."""
+
 DSH_MODELS={
  'gpt-6-luna':('GPT-6 Luna',272000,128000),
  'gpt-6-sol':('GPT-6 Sol',272000,128000),
@@ -397,7 +401,7 @@ class Handler(BaseHTTPRequestHandler):
     if not self.password_session:raise LoginRequired('请先登录WorkOS')
    else:self.app.access_validator.verify(self.headers.get('Cf-Access-Jwt-Assertion',''))
   expected_csrf=self.password_session['csrf'] if self.password_session else self.app.csrf
-  if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),expected_csrf):raise PermissionError('会话校验失败，请刷新页面')
+  if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token','').encode('utf-8'),expected_csrf.encode('utf-8')):raise CsrfExpired('会话校验失败，请刷新页面')
  def auth_peer(self):
   return (self.headers.get('Cf-Connecting-IP') or self.client_address[0])[:64]
  def auth_get(self,path):
@@ -481,6 +485,7 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond({'error':'登录挑战已过期','code':'login_challenge_expired'},409)
   if isinstance(exc,TooManyLogins):
    self.response_headers={'Retry-After':'600'};return self.respond({'error':str(exc)},429)
+  if isinstance(exc,CsrfExpired):return self.respond({'error':str(exc),'code':'csrf_expired'},403)
   if isinstance(exc,PermissionError):self.respond({'error':str(exc)},403)
   elif isinstance(exc,OriginalUnavailable):self.respond({'error':exc.args[0],'code':'original_unavailable'},404)
   elif isinstance(exc,KeyError):self.respond({'error':'记录不存在'},404)
@@ -575,7 +580,7 @@ class Handler(BaseHTTPRequestHandler):
     mime='application/pdf' if fmt=='pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     return self.respond(payload,mime=mime,filename=stem+'.'+fmt)
    if path.startswith('/api/'):raise KeyError('接口不存在')
-   static={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/markdown.js':'markdown.js','/valuation.js':'valuation.js','/style.css':'style.css','/icon.svg':'icon.svg'}
+   static={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/api-client.js':'api-client.js','/markdown.js':'markdown.js','/valuation.js':'valuation.js','/style.css':'style.css','/icon.svg':'icon.svg'}
    if path=='/favicon.ico':return self.respond(b'',204,'image/x-icon')
    if path not in static:raise KeyError('页面不存在')
    file=ROOT/'web'/static[path]

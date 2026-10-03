@@ -15,6 +15,7 @@ const chromeExecutable = process.env.WORKOS_TEST_CHROME || 'C:/Program Files/Goo
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const failures = [], requests = [], originalRequests = [], runtimeErrors = [], interceptionErrors = [];
 const workflowJobs = new Map(), workflowRequestKeys = new Map();
+const csrfScenario={enabled:false,seedStale:false,mode:'recover',bootstrapCalls:0,parseRequests:[],successfulModelCalls:0,expected:null,retryDom:null};
 let temp, server, chrome, cdp, origin, csrf, checks = 0;
 
 async function freePort() {
@@ -117,7 +118,8 @@ async function route(name) {
   await cdp.evaluate('location.hash=' + q(name));
   const allowedHashes = name === 'projects' ? ['#projects', '#overview'] : ['#' + name];
   const active=name==='projects'?'overview':name;
-  await until(() => cdp.evaluate(q(allowedHashes) + `.includes(location.hash) && !!document.querySelector('#primary-nav [data-page='+`+q(active)+`+'].active') && !!document.querySelector('main h1') && document.querySelector('main').getAttribute('aria-busy')!=='true'`), 'route ' + name);
+  const navSelector=name==='settings'?'#settings-nav.active':'#primary-nav [data-page='+active+'].active';
+  await until(() => cdp.evaluate(q(allowedHashes) + `.includes(location.hash) && !!document.querySelector(`+q(navSelector)+`) && !!document.querySelector('main h1') && document.querySelector('main').getAttribute('aria-busy')!=='true'`), 'route ' + name);
   // hashchange rendering is synchronous, but wait for its dispatch after Runtime.evaluate.
   await cdp.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
 }
@@ -223,6 +225,26 @@ async function main() {
   cdp.on('Fetch.requestPaused', async event => {
     const url = new URL(event.request.url);
     if (url.origin !== origin) return cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+    if(csrfScenario.enabled&&url.pathname==='/api/bootstrap'&&event.request.method==='GET'){
+      csrfScenario.bootstrapCalls++;
+      // Only the browser receives a synthetic stale token. No server token or endpoint is modified.
+      const fresh=await api('bootstrap');
+      const result={...fresh,csrf:csrfScenario.seedStale?'synthetic-expired-token':fresh.csrf,dsh:{...fresh.dsh,available:true,models:fresh.dsh?.models?.length?fresh.dsh.models:[{id:'gpt-6-luna',name:'Synthetic GPT-6 Luna'}]}};
+      return fulfillJson(event,result);
+    }
+    if(csrfScenario.enabled&&url.pathname==='/api/model/parse-assumptions'){
+      const body=JSON.parse(event.request.postData||'{}');
+      const token=Object.entries(event.request.headers).find(([name])=>name.toLowerCase()==='x-csrf-token')?.[1];
+      csrfScenario.parseRequests.push({body,token,serialized:event.request.postData||'',mode:csrfScenario.mode});requests.push({path:url.pathname,method:event.request.method,body});
+      if(csrfScenario.mode==='forbidden')return fulfillJson(event,{code:'permission_denied',error:'Synthetic permissions denied'},403);
+      if(csrfScenario.parseRequests.filter(item=>item.mode==='recover').length===1){
+        await cdp.evaluate("window.__csrfPendingReview=document.querySelector('.valuation-review');window.__csrfPendingMain=document.querySelector('#main')");
+        return fulfillJson(event,{code:'csrf_expired',error:'会话校验失败，请刷新页面'},403);
+      }
+      csrfScenario.retryDom=await cdp.evaluate("({sameReview:document.querySelector('.valuation-review')===window.__csrfPendingReview,sameMain:document.querySelector('#main')===window.__csrfPendingMain,ready:document.querySelector('#main').getAttribute('aria-busy')!=='true',text:document.querySelector('#valuation-text').value,json:document.querySelector('#valuation-json').value})");
+      csrfScenario.successfulModelCalls++;
+      return fulfillJson(event,{assumptions:csrfScenario.expected,missing:[],unmapped_fields:[]});
+    }
     if (/^\/api\/documents\/[^/]+\/original$/.test(url.pathname)) originalRequests.push(url.pathname);
     if(url.pathname==='/api/workflows/plan') requests.push({path:url.pathname,method:event.request.method,body:JSON.parse(event.request.postData||'{}')});
     if(await mockWorkflowRequest(event,url))return;
@@ -492,6 +514,31 @@ async function main() {
     await click('.valuation-review details summary');await fill('#valuation-json',JSON.stringify({...assumptions,net_income:200},null,2));assert(await cdp.evaluate("!document.querySelector('.valuation-result')&&!document.querySelector('#valuation-scenarios-json')"),'Edited assumptions left stale model/scenario results');
     await click('[data-action=valuation-calculate]');await until(()=>cdp.evaluate("!!document.querySelector('.valuation-result')&&document.querySelector('.valuation-result').textContent.includes('2,400')"),'recomputed saved model');
     await click('[data-action=valuation-save]');await until(async()=>((await api('state')).deliverables.some(i=>i.method==='net_income'&&i.assumptions?.net_income===200&&i.result?.equity_value===2400)),'typed recomputed model save');
+  });
+  await check('expired CSRF refreshes once and retries valuation parsing without losing edited inputs', async () => {
+    csrfScenario.enabled=true;csrfScenario.seedStale=true;csrfScenario.mode='recover';
+    await route('settings');await click('[data-action=refresh-status]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=refresh-status]').disabled"),'synthetic stale session seeded');csrfScenario.seedStale=false;
+    await route('finance');await select('#valuation-method','net_income');
+    const text='Synthetic FY2026E RMB 百万元 net income 321 and P/E 11.';
+    const edited={currency:'RMB',unit:'百万元',period:'FY2026E',net_income:321,pe_multiple:11,diluted_shares:50};csrfScenario.expected=edited;
+    await fill('#valuation-text',text);await click('.valuation-review details summary');await fill('#valuation-json',JSON.stringify(edited,null,2));
+    const bootstrapBefore=csrfScenario.bootstrapCalls;await click('[data-action=valuation-parse]');
+    await until(()=>csrfScenario.parseRequests.length===2&&csrfScenario.successfulModelCalls===1,'csrf refresh and single successful retry');await until(()=>cdp.evaluate("!document.querySelector('[data-action=valuation-parse]').disabled"),'valuation parse retry completed');
+    const [first,second]=csrfScenario.parseRequests;
+    assert(first.token==='synthetic-expired-token'&&second.token===csrf&&first.serialized===second.serialized,'Retry did not replace the stale token or preserve the exact serialized parse request');
+    assert(csrfScenario.bootstrapCalls===bootstrapBefore+1&&csrfScenario.successfulModelCalls===1,'Expired-session recovery repeated bootstrap or charged more than one model call');
+    const pending=csrfScenario.retryDom;assert(pending?.sameReview&&pending.sameMain&&pending.ready&&pending.text===text&&JSON.stringify(JSON.parse(pending.json))===JSON.stringify(edited),'Token refresh rebooted the page or discarded pending valuation inputs');
+    assert(await cdp.evaluate('document.querySelector("#valuation-text").value==='+q(text)+'&&JSON.stringify(JSON.parse(document.querySelector("#valuation-json").value))==='+q(JSON.stringify(edited))),'Successful retry lost natural-language or edited JSON inputs');
+    await screenshot('csrf-recovery-1280');
+  });
+  await check('ordinary forbidden responses do not refresh or retry model calls', async () => {
+    csrfScenario.mode='forbidden';const before=csrfScenario.parseRequests.length,bootstrapBefore=csrfScenario.bootstrapCalls,chargesBefore=csrfScenario.successfulModelCalls;
+    const previous=await cdp.evaluate("({text:document.querySelector('#valuation-text').value,json:document.querySelector('#valuation-json').value})");
+    await click('[data-action=valuation-parse]');await until(()=>cdp.evaluate("!document.querySelector('[data-action=valuation-parse]').disabled&&document.querySelector('main').textContent.includes('Synthetic permissions denied')"),'ordinary 403 visible');
+    assert(csrfScenario.parseRequests.length===before+1&&csrfScenario.bootstrapCalls===bootstrapBefore&&csrfScenario.successfulModelCalls===chargesBefore,'Non-CSRF 403 was retried or invoked a model');
+    assert(await cdp.evaluate('document.querySelector("#valuation-text").value==='+q(previous.text)+'&&document.querySelector("#valuation-json").value==='+q(previous.json)),'Permission failure discarded valuation draft inputs');
+    await screenshot('csrf-permission-error-1280');
+    csrfScenario.enabled=false;
   });
   await check('mobile 375px viewport has no document horizontal overflow', async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });

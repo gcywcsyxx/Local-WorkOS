@@ -4,6 +4,12 @@ Validation uses synthetic fixtures and independent temporary databases. No origi
 
 ## Local results
 
+### 1.5.3 session recovery, 2026-10-04
+
+- Real HTTP fixtures verify that stale CSRF rejection happens before writes, job creation or provider calls; Host/Origin, login and other permission failures cannot carry the recovery code.
+- The isolated browser reproduces the valuation parser failure, refreshes its token once, sends an identical request once, and keeps the natural-language/JSON drafts and pending DOM. An ordinary permission failure is shown without refresh or retry.
+- Transport tests cover concurrent refresh sharing, the retry limit, exact request preservation, invalid bootstrap data, workspace changes and aborts. Refreshing a token does not call full boot or reload the page. An already-open older client requires one page refresh to load this fix.
+
 ### 1.5.2 homepage project creation, 2026-10-04
 
 - 29 isolated Chrome/CDP groups pass, including creation from the homepage button/dropdown, cancel preserving the prior project/request, empty-name rejection, minimal creation automatically selected, retained workflow purpose, unchanged existing materials and research selections, plus desktop/375px layout.
@@ -47,6 +53,7 @@ A synthetic canary was sent through the integrated DSH → GPT-6 Luna route and 
 
 ```shell
 node tests/test_markdown.cjs
+node tests/test_api_client.cjs
 node tests/browser_auth_client.cjs
 node tests/browser_research_cdp.cjs
 ```

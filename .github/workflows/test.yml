@@ -37,3 +37,5 @@ jobs:
           PYTHONIOENCODING: utf-8
           WORKOS_MEMORY_ROOT: ''
         run: python -m unittest discover -s tests -v
+      - name: Run session recovery transport regressions
+        run: node tests/test_api_client.cjs

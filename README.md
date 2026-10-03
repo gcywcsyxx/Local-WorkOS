@@ -13,6 +13,8 @@ A local-first research and project workspace with evidence-grounded retrieval, m
 
 部分下文为历史说明；最新功能与安全契约以上述PRD和交接指南为准。
 
+1.5.3 修复发布/重启后旧页面的会话校验错误：对明确未执行的过期令牌请求自动更新并重试一次，保留已输入内容。
+
 ## 启动 / Run
 
 核心仅需 Python 3.11+，无 Node、CDN 或前端构建依赖。要使用 GPT/DSH，需本机已有登录的 DSH CLI；WorkOS 不会复制 OAuth 密钥。

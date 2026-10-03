@@ -23,6 +23,10 @@ def main():
     _, body = get('http://127.0.0.1:18866/api/workflows')
     if len(json.loads(body).get('workflows', [])) < 11:
         raise ValueError('Workflow catalogue is unavailable')
+    _, shell = get('http://127.0.0.1:18866/')
+    _, client = get('http://127.0.0.1:18866/api-client.js')
+    if b'/api-client.js' not in shell or b'WorkOSApiClient' not in client or b'csrf_expired' not in client:
+        raise ValueError('The installed session recovery client is unavailable')
     origin = env.get('WORKOS_PUBLIC_ORIGIN', '').rstrip('/')
     _, body = get('http://127.0.0.1:18866/api/sync/status')
     sync = json.loads(body)
@@ -48,7 +52,7 @@ def main():
                     raise ValueError('Anonymous API denial returned an unexpected status') from None
             else:
                 raise ValueError('Anonymous public workspace access was allowed')
-    print(json.dumps({'local_workflows': 'ok', 'public_login_and_anonymous_denial': 'ok' if origin else 'not-configured'}))
+    print(json.dumps({'local_workflows': 'ok', 'session_recovery_client': 'ok', 'public_login_and_anonymous_denial': 'ok' if origin else 'not-configured'}))
 
 
 if __name__ == '__main__':

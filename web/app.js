@@ -165,25 +165,17 @@
   const deliverableKindOptions = selected => options([...new Set([...KINDS, ...app.workflows.map(item=>item.kind), selected].filter(Boolean))], selected);
 
   class StaleRequestError extends Error { constructor() { super('工作区已切换'); this.name = 'StaleRequestError'; } }
+  const apiClient = window.WorkOSApiClient.create({
+    fetch: (...args) => fetch(...args),
+    context: () => ({ epoch: app.epoch, workspace: app.workspace, csrf: app.csrf }),
+    setToken: token => { app.csrf = token; },
+    staleError: () => new StaleRequestError()
+  });
   async function api(path, options = {}) {
-    const epoch = app.epoch;
-    const headers = { 'X-Workspace': app.workspace, 'X-CSRF-Token': app.csrf, ...(options.headers || {}) };
-    const method = options.method || (options.body !== undefined ? 'POST' : 'GET');
-    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    const method = String(options.method || (options.body !== undefined ? 'POST' : 'GET')).toUpperCase();
     if (method !== 'GET') app.mutations++;
     try {
-      const response = await fetch(path.startsWith('/auth/') ? path : `/api${path}`, { method, headers, cache: 'no-store', credentials: 'same-origin', ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}), ...(options.signal ? { signal: options.signal } : {}) });
-      if (epoch !== app.epoch) throw new StaleRequestError();
-      if (!response.ok) {
-        let message = `请求失败（${response.status}）`;
-        try { const error = await response.json(); if (error.error) message = String(error.error); } catch { /* HTTP status remains useful when the server cannot return JSON. */ }
-        throw new Error(message);
-      }
-      if (options.raw) return response;
-      if (response.status === 204) return {};
-      const result = await response.json();
-      if (epoch !== app.epoch) throw new StaleRequestError();
-      return result;
+      return await apiClient.request(path, options);
     } catch (error) {
       if (error instanceof TypeError && /fetch|network|failed/i.test(error.message)) throw new Error('无法连接本地服务。请确认 Local WorkOS 启动器仍在运行，然后重试。');
       throw error;
@@ -243,7 +235,7 @@
     $('#workspace-switch').innerHTML = `<span class="workspace-icon">${icon(app.workspace === 'personal' ? 'user' : 'briefcase')}</span><span class="workspace-copy">${workspaceName()}<small>${app.workspace === 'personal' ? 'PERSONAL · 仅自己可见' : 'DEMO · 全部为合成数据'}</small></span>${icon('down')}`;
     $('#breadcrumb').innerHTML = `<span>${workspaceName()}</span><span class="slash">/</span><span class="current">${route[1]}</span>`;
     $('#footer-workspace').textContent = `${workspaceName()} · ${app.workspace === 'demo' ? '合成演示数据' : '本地存储'}`;
-    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.4';
+    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.5.3';
   }
   function render() {
     renderShell();
@@ -1118,7 +1110,9 @@
     } finally { state.deliverableSaving = false; if (view() === state && app.page === 'deliverables') render(); else renderShell(); }
   }
   async function download(path, fallbackName, request = {}) {
+    const epoch = app.epoch, workspace = app.workspace;
     const response = await api(path, { ...request, raw: true }); const blob = await response.blob();
+    if (epoch !== app.epoch || workspace !== app.workspace) throw new StaleRequestError();
     const disposition = response.headers.get('Content-Disposition') || '';
     let filename = fallbackName;
     try { const utf = disposition.match(/filename\*=UTF-8''([^;]+)/i); const ascii = disposition.match(/filename="?([^";]+)"?/i); if (utf) filename = decodeURIComponent(utf[1]); else if (ascii) filename = ascii[1]; } catch { /* Fall back to the safe local title. */ }

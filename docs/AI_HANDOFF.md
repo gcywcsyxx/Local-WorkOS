@@ -1,12 +1,12 @@
 # Local WorkOS — AI engineering handoff
 
-Documentation date: 2026-10-04. Product version: 1.5.2. This document describes the homepage project creation, quality harness, durable jobs, automatic organization and reloadable-model release.
+Documentation date: 2026-10-04. Product version: 1.5.3. This document describes session recovery, homepage project creation, quality harness, durable jobs, automatic organization and reloadable-model releases.
 
 Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified behavior and proposed additions. Earlier [README](<../README.md>), [architecture](<ARCHITECTURE.md>) and [testing](<TESTING.md>) descriptions can lag current code; do not remove password auth, editable PPTX or four valuation methods based on historical wording.
 
 ## Source vs install vs data
 - The repository root is editable development source and the Git working tree.
-- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.5.2/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
+- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.5.3/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
 - Runtime personal/demo SQLite, authentication and logs are under `%LOCALAPPDATA%/LocalWorkOS`, never in source control.
 - OneDrive is an optional JSON/text mirror and backup target, not the live SQLite/WAL database or a bidirectional multi-master store.
 - Remote access reaches one authoritative host through its dedicated tunnel; keep that host running and online. Do not attach divergent databases/sessions to the same tunnel from two machines.
@@ -32,6 +32,7 @@ Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified beha
 | [sync](<../workos/sync.py>) | Atomic outward mirror, previous revisions and empty-database restore |
 | [memory](<../workos/memory.py>) | Read-only memory import/filtering and model-call privacy boundary |
 | [main UI](<../web/app.js>) / [valuation UI](<../web/valuation.js>) | State, research/meeting/model workflow and export buttons |
+| [API client](<../web/api-client.js>) | Same-origin requests; one bounded recovery for a write rejected with csrf_expired; shared refresh and workspace/abort guards |
 | [auth UI](<../web/auth.js>) / [login](<../web/login.html>) | Same-origin login and local-only password setup |
 | [launcher](<../launch.py>) | Stable startup, saved non-secret WORKOS settings and approved Office runtime paths |
 | [installer](<../tools/install.ps1>) / [public starter](<../tools/start_public.py>) | Separate Windows deployment and idempotent dedicated connector startup |
@@ -97,7 +98,7 @@ When the user requests publication, that instruction authorizes the release belo
 ```
 
 Stop/restart the current app through its supported launcher when releasing. Use [public starter](<../tools/start_public.py>) only with the deployment-owned dedicated UUID/config and password-protected origin. New code on OneDrive or GitHub is not proof that the running service was updated. New machines must provision authorized local runtime independently and must not run a second conflicting write authority.
-The SOP runs isolated Python, Markdown, authentication-client and Chrome/CDP tests; checks public-source privacy/history; commits reviewed source; backs up committed SQLite including WAL; installs and retargets only an existing authorized startup shortcut; restarts the app; verifies local version/commit, mirror status, public login and anonymous API denial; then pushes and compares remote SHA. Authentication/session/CSRF/logout persistence are exercised with synthetic credentials in tests. Read-only production probes do not obtain real cookies/passwords and do not claim an actual authenticated human login. The tunnel starter reuses the configured dedicated connector. Do not print credentials or cookie/CSRF values.
+The SOP runs isolated Python, Markdown, API transport, authentication-client and Chrome/CDP tests; checks public-source privacy/history; commits reviewed source; backs up committed SQLite including WAL; installs and retargets only an existing authorized startup shortcut; restarts the app; verifies local version/commit, mirror status, public login and anonymous API denial; then pushes and compares remote SHA. Authentication/session/CSRF/logout persistence are exercised with synthetic credentials in tests. Read-only production probes do not obtain real cookies/passwords and do not claim an actual authenticated human login. The tunnel starter reuses the configured dedicated connector. Do not print credentials or cookie/CSRF values.
 
 ## Work recipes and coverage
 [workflows](<../workos/workflows.py>) contains research brief, DD, IC Memo, discussion material, technology explainer, agreement review, interview preparation, expert-network request, email, project update, version comparison, model review and tabular meeting synthesis. Home planning is deterministic and sends no material; generation uses the selected provider and explicitly selected sources. Every selected document receives a bounded excerpt and a coverage entry. Reject missing sources, memory, cross-project records, empty answers and invalid citation labels before saving a deliverable. Local excerpt mode must never silently call an external model. Preserve requested audience, language, page count and purpose. Separate source facts, management forecasts, independent expert views and team assumptions.
